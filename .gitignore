@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+*.env
+
+# VS Code
+.vscode/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Vectorstore (large binary files - regenerate from documents)
+vectorstore/
+
+# Data files (may be large)
+# Uncomment if data/ is too large to push:
+# data/
+
+# OS
+.DS_Store
+Thumbs.db
