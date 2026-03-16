@@ -47,7 +47,7 @@ _INVALID_RESPONSES = {
     "off-topic": "❌ **Invalid query.** I can only answer questions related to farming, crops, pests, fertilizers, irrigation, or government agricultural schemes like PM-KISAN. Please rephrase your question.",
 }
 
-st.set_page_config(page_title="Farmer Advisory Assistant", page_icon="🌾", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Farmer Advisory Assistant", page_icon="🌾", layout="wide", initial_sidebar_state="collapsed")
 
 
 def _seed_welcome_message():
@@ -104,31 +104,25 @@ _THEMES = {
 }
 
 current_theme = _THEMES["Light"]
-
 css = """
 <style>
-    /* ── Variables ─────────────────────────────── */
     :root {
         --chat-input-width: min(1100px, calc(100vw - 1.2rem));
         --composer-bottom: 0.65rem;
         --mic-size: 2.2rem;
         --green-600: #16a34a;
         --green-700: #15803d;
-        --green-50:  #f0fdf4;
+        --green-50: #f0fdf4;
         --radius-pill: 999px;
         --radius-card: 16px;
-        --shadow-md: 0 4px 16px rgba(0,0,0,0.10);
-        --shadow-lg: 0 8px 28px rgba(0,0,0,0.14);
     }
 
-    /* ── Keep Streamlit header transparent so sidebar toggle can render */
     header[data-testid="stHeader"] {
         background: transparent !important;
         box-shadow: none !important;
         block-size: 0 !important;
     }
 
-    /* Force sidebar toggle visible/clickable across Streamlit variants */
     [data-testid="stSidebarCollapsedControl"],
     button[title="Open sidebar"],
     button[title="Close sidebar"],
@@ -138,8 +132,10 @@ css = """
         position: fixed !important;
         inset-block-start: 0.55rem !important;
         inset-inline-start: 0.55rem !important;
-        inline-size: 2rem !important;
-        block-size: 2rem !important;
+        inline-size: 2.4rem !important;
+        block-size: 2.4rem !important;
+        min-inline-size: 44px !important;
+        min-block-size: 44px !important;
         border-radius: 8px !important;
         background: #166534 !important;
         border: 1px solid rgba(255,255,255,0.22) !important;
@@ -155,32 +151,29 @@ css = """
     [data-testid="stSidebarCollapsedControl"] button,
     [data-testid="stSidebarCollapsedControl"] svg,
     button[title="Open sidebar"] svg,
-    button[title="Close sidebar"] svg,
-    button[aria-label="Open sidebar"] svg,
-    button[aria-label="Close sidebar"] svg {
+    button[title="Close sidebar"] svg {
         color: #ffffff !important;
         fill: #ffffff !important;
         stroke: #ffffff !important;
         opacity: 1 !important;
     }
 
-    /* ── App background ────────────────────────── */
     html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"] {
         block-size: 100%;
     }
     [data-testid="stAppViewContainer"] { background: __APP_BG__; }
 
-    /* ── Main content area ─────────────────────── */
     .main .block-container {
         max-inline-size: 1120px;
-        padding-block-start: 5.2rem;   /* space for fixed topbar */
+        padding-block-start: 5.2rem;
         padding-block-end: 7rem;
+        padding-inline: 1.2rem;
     }
-    /* ── Topbar — truly fixed at viewport top ──── */
+
     .chat-topbar {
         position: fixed;
         inset-block-start: 0;
-        inset-inline-start: 2.8rem;   /* leave room for sidebar toggle button */
+        inset-inline-start: 2.8rem;
         inset-inline-end: 0;
         z-index: 999;
         background: __TOPBAR_BG__;
@@ -195,41 +188,32 @@ css = """
         transition: inset-inline-start 0.3s ease, padding 0.25s ease;
     }
 
-    /* When sidebar is expanded — shift topbar past the sidebar */
     [data-testid="stApp"]:has([data-testid="stSidebar"][aria-expanded="true"]) .chat-topbar {
         inset-inline-start: var(--sidebar-width, 336px);
         padding: 0.65rem 1.1rem;
     }
+    [data-testid="stApp"]:has([data-testid="stSidebar"][aria-expanded="true"]) .chat-topbar h2 { font-size: 0.95rem; }
+    [data-testid="stApp"]:has([data-testid="stSidebar"][aria-expanded="true"]) .chat-topbar .topbar-icon { font-size: 1.45rem; }
+    [data-testid="stApp"]:has([data-testid="stSidebar"][aria-expanded="true"]) .chat-topbar p { font-size: 0.76rem; }
 
-    /* Shrink title text when sidebar is open */
-    [data-testid="stApp"]:has([data-testid="stSidebar"][aria-expanded="true"]) .chat-topbar h2 {
-        font-size: 0.95rem;
-    }
-
-    [data-testid="stApp"]:has([data-testid="stSidebar"][aria-expanded="true"]) .chat-topbar .topbar-icon {
-        font-size: 1.45rem;
-    }
-
-    [data-testid="stApp"]:has([data-testid="stSidebar"][aria-expanded="true"]) .chat-topbar p {
-        font-size: 0.76rem;
-    }
-    .chat-topbar .topbar-icon {
-        font-size: 2rem;
-        line-height: 1;
-        flex-shrink: 0;
-    }
-    .chat-topbar .topbar-text { flex: 1; }
+    .chat-topbar .topbar-icon { font-size: 2rem; line-height: 1; flex-shrink: 0; }
+    .chat-topbar .topbar-text { flex: 1; min-inline-size: 0; }
     .chat-topbar h2 {
         margin: 0;
         font-size: 1.18rem;
         font-weight: 700;
-        letter-spacing: -0.01em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .chat-topbar p {
         margin: 0.15rem 0 0 0;
         color: __TOPBAR_SUBTEXT__;
         font-size: 0.84rem;
         opacity: 0.92;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .topbar-status {
         display: flex;
@@ -242,6 +226,7 @@ css = """
         padding: 0.28rem 0.72rem;
         font-weight: 500;
         flex-shrink: 0;
+        white-space: nowrap;
     }
     .topbar-status::before {
         content: "";
@@ -252,12 +237,8 @@ css = """
         background: #4ade80;
         animation: pulse-dot 2s infinite;
     }
-    @keyframes pulse-dot {
-        0%,100% { opacity: 1; }
-        50%      { opacity: 0.4; }
-    }
+    @keyframes pulse-dot { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 
-    /* ── Chat message bubbles ──────────────────── */
     [data-testid="stChatMessage"] {
         padding: 0.5rem 0.6rem !important;
         border-radius: var(--radius-card) !important;
@@ -265,18 +246,15 @@ css = """
         border: 1px solid transparent !important;
         transition: background 0.15s;
     }
-    /* User messages — right-tinted */
     [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
         background: #f0fdf4 !important;
         border-color: #bbf7d0 !important;
     }
-    /* Assistant messages — white card */
     [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
         background: #ffffff !important;
         border-color: #e5e7eb !important;
         box-shadow: 0 2px 8px rgba(0,0,0,0.05);
     }
-    /* Avatar circles */
     [data-testid="stChatMessageAvatarUser"] {
         background: linear-gradient(135deg, #16a34a, #15803d) !important;
         border-radius: 50% !important;
@@ -287,21 +265,14 @@ css = """
         border-radius: 50% !important;
         color: #fff !important;
     }
-    /* Message text */
-    [data-testid="stChatMessage"] p {
-        font-size: 0.97rem;
-        line-height: 1.65;
-        color: #111827;
-    }
+    [data-testid="stChatMessage"] p { font-size: 0.97rem; line-height: 1.65; color: #111827; }
 
-    /* ── Bottom composer container ─────────────── */
     div[data-testid="stBottomBlockContainer"] {
         padding-inline: 0.55rem;
         padding-block-end: var(--composer-bottom);
         background: linear-gradient(to top, rgba(246,248,251,0.98) 55%, transparent 100%);
     }
 
-    /* ── Chat input pill ───────────────────────── */
     div[data-testid="stChatInput"] {
         inline-size: 100%;
         max-inline-size: var(--chat-input-width);
@@ -327,37 +298,22 @@ css = """
         padding-block: 0.28rem !important;
         background: transparent !important;
     }
-    div[data-testid="stChatInput"] textarea::placeholder {
-        color: #9ca3af !important;
-        opacity: 1;
-    }
-    /* Send button */
+    div[data-testid="stChatInput"] textarea::placeholder { color: #9ca3af !important; opacity: 1; }
     div[data-testid="stChatInput"] button {
         border-radius: var(--radius-pill) !important;
-        inline-size: 2.2rem !important;
-        block-size: 2.2rem !important;
-        min-inline-size: 2.2rem !important;
-        min-block-size: 2.2rem !important;
+        inline-size: 2.6rem !important;
+        block-size: 2.6rem !important;
+        min-inline-size: 44px !important;
+        min-block-size: 44px !important;
         background: linear-gradient(135deg, #16a34a, #15803d) !important;
         border: none !important;
         box-shadow: 0 2px 8px rgba(22,163,74,0.28) !important;
         transition: transform 0.12s, box-shadow 0.12s;
     }
-    div[data-testid="stChatInput"] button:hover {
-        transform: scale(1.06);
-        box-shadow: 0 4px 14px rgba(22,163,74,0.38) !important;
-    }
-    div[data-testid="stChatInput"] button svg {
-        display: none !important;
-    }
-    div[data-testid="stChatInput"] button::before {
-        content: "➤";
-        color: #ffffff;
-        font-size: 0.95rem;
-        line-height: 1;
-    }
+    div[data-testid="stChatInput"] button:hover { transform: scale(1.06); }
+    div[data-testid="stChatInput"] button svg { display: none !important; }
+    div[data-testid="stChatInput"] button::before { content: ""; color: #fff; font-size: 1rem; }
 
-    /* ── Sidebar styling ───────────────────────── */
     [data-testid="stSidebar"] {
         background: #f8fafc !important;
         border-inline-end: 1px solid #e2e8f0 !important;
@@ -379,7 +335,6 @@ css = """
         margin-block-end: 0.4rem;
         margin-block-start: 1rem;
     }
-    /* Quick prompt buttons */
     [data-testid="stSidebar"] button[kind="secondary"] {
         border-radius: 10px !important;
         border: 1px solid #dcfce7 !important;
@@ -389,13 +344,13 @@ css = """
         font-weight: 500 !important;
         text-align: start !important;
         transition: background 0.14s, border-color 0.14s;
-        padding-block: 0.42rem !important;
+        padding-block: 0.6rem !important;
+        min-block-size: 44px !important;
     }
     [data-testid="stSidebar"] button[kind="secondary"]:hover {
         background: #dcfce7 !important;
         border-color: #86efac !important;
     }
-    /* New chat button */
     [data-testid="stSidebar"] button[kind="primary"],
     [data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:last-of-type {
         border-radius: 10px !important;
@@ -403,9 +358,9 @@ css = """
         color: #fff !important;
         border: none !important;
         font-weight: 600 !important;
+        min-block-size: 44px !important;
     }
 
-    /* ── Sidebar mic ───────────────────────────── */
     .sidebar-mic {
         background: #f0fdf4;
         border: 1px solid #bbf7d0;
@@ -419,43 +374,75 @@ css = """
     .sidebar-mic button {
         inline-size: var(--mic-size) !important;
         block-size: var(--mic-size) !important;
-        min-inline-size: var(--mic-size) !important;
-        min-block-size: var(--mic-size) !important;
+        min-inline-size: 44px !important;
+        min-block-size: 44px !important;
         padding: 0 !important;
         border-radius: var(--radius-pill) !important;
         border: 1px solid #86efac !important;
         background: linear-gradient(135deg,#dcfce7,#bbf7d0) !important;
     }
     .sidebar-mic button svg { display: none !important; }
-    .sidebar-mic button::before {
-        content: "🎤";
-        font-size: 1.05rem;
-        line-height: 1;
-    }
+    .sidebar-mic button::before { content: ""; font-size: 1.05rem; line-height: 1; }
 
-    /* ── Spinner / status text ─────────────────── */
     .stSpinner > div { border-block-start-color: var(--green-600) !important; }
 
-    /* ── Responsive ────────────────────────────── */
-    @media (max-inline-size: 768px) {
-        :root {
-            --chat-input-width: calc(100vw - 0.8rem);
-            --composer-bottom: 0.42rem;
-            --mic-size: 2.15rem;
+    @media (max-width: 900px) {
+        .main .block-container {
+            padding-block-start: 4.8rem;
+            padding-block-end: 7rem;
+            padding-inline: 0.9rem;
         }
+        .chat-topbar h2 { font-size: 1.05rem; }
+        .chat-topbar p  { font-size: 0.78rem; }
+    }
+
+    @media (max-width: 600px) {
+        :root {
+            --chat-input-width: calc(100vw - 0.5rem);
+            --composer-bottom: env(safe-area-inset-bottom, 0.5rem);
+            --mic-size: 2.75rem;
+        }
+        .chat-topbar {
+            inset-inline-start: 0 !important;
+            padding: 0.6rem 0.75rem 0.6rem 3.4rem;
+            gap: 0.5rem;
+        }
+        .chat-topbar .topbar-icon { font-size: 1.5rem; }
+        .chat-topbar h2 { font-size: 0.92rem; }
+        .chat-topbar p  { display: none; }
+        .topbar-status  { display: none; }
         .main .block-container {
             max-inline-size: 100%;
-            padding-block-start: 0.65rem;
-            padding-block-end: 6rem;
-            padding-inline: 0.55rem;
+            padding-block-start: 4rem;
+            padding-block-end: 5.5rem;
+            padding-inline: 0.4rem;
         }
-        div[data-testid="stChatInput"] {
-            padding-inline-start: 0.4rem;
-            max-inline-size: 100%;
+        [data-testid="stChatMessage"] {
+            padding: 0.45rem 0.5rem !important;
+            border-radius: 12px !important;
+            margin-block-end: 0.4rem !important;
         }
-        .chat-topbar { padding: 0.7rem 0.9rem; }
-        .chat-topbar h2 { font-size: 1rem; }
-        .topbar-status { display: none; }
+        [data-testid="stChatMessage"] p { font-size: 0.93rem; line-height: 1.6; }
+        div[data-testid="stBottomBlockContainer"] {
+            padding-inline: 0.3rem;
+            padding-block-end: max(var(--composer-bottom), 0.4rem);
+        }
+        div[data-testid="stChatInput"] { padding-inline-start: 0.2rem; max-inline-size: 100%; }
+        div[data-testid="stChatInput"] textarea { font-size: 0.97rem !important; }
+        [data-testid="stSidebar"] {
+            min-inline-size: 100vw !important;
+            max-inline-size: 100vw !important;
+        }
+        [data-testid="stSidebar"] button[kind="secondary"] {
+            font-size: 0.9rem !important;
+            padding-block: 0.7rem !important;
+        }
+    }
+
+    @media (max-width: 380px) {
+        .chat-topbar h2 { font-size: 0.82rem; }
+        [data-testid="stChatMessage"] p { font-size: 0.88rem; }
+        div[data-testid="stChatInput"] textarea { font-size: 0.92rem !important; }
     }
 </style>
 """
@@ -468,15 +455,15 @@ css = css.replace("__TOPBAR_SUBTEXT__", current_theme["topbar_subtext"])
 st.markdown(css, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.markdown("### 🌾 Farmer Assistant")
+    st.markdown("### Farmer Assistant")
     st.caption("Chat-style advisory with voice input")
 
     st.session_state.enable_tts = st.toggle(
-        "🔊 Read answers aloud",
+        "Read answers aloud",
         value=st.session_state.enable_tts,
     )
 
-    st.markdown("#### 🎯 Quick prompts")
+    st.markdown("#### Quick prompts")
     quick_questions = [
         "How to control fall armyworm in maize?",
         "Best fertilizer schedule for paddy",
@@ -489,12 +476,12 @@ with st.sidebar:
             st.session_state.pending_prompt = item
             st.rerun()
 
-    st.markdown("#### 🎙️ Voice query")
+    st.markdown("#### Voice query")
     st.markdown("<div class='sidebar-mic'>", unsafe_allow_html=True)
     mic_audio = st.audio_input(" ", key="mic_input")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    if st.button("🧹 New chat", use_container_width=True):
+    if st.button("New chat", use_container_width=True):
         st.session_state.messages = _seed_welcome_message()
         st.session_state.pending_prompt = None
         st.session_state.last_mic_hash = None
@@ -503,7 +490,7 @@ with st.sidebar:
 st.markdown(
     """
     <div class="chat-topbar">
-        <span class="topbar-icon">🌾</span>
+        <span class="topbar-icon"></span>
         <div class="topbar-text">
             <h2>AI Farmer Advisory Chat</h2>
             <p>Ask about crops, pests, fertilizer, irrigation &amp; govt. schemes</p>
