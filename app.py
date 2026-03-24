@@ -1,10 +1,22 @@
 import hashlib
+import json
+import os
 import re
+from datetime import datetime, timedelta
+from typing import Optional
+from urllib.error import HTTPError
+from urllib.parse import urlencode
+from urllib.request import urlopen
 
 import streamlit as st
+from dotenv import load_dotenv
+from streamlit.errors import StreamlitSecretNotFoundError
+from price_forecasting import CropPriceForecastingEngine
 from rag.qa_chain import ask
 from voice.speech_to_text import transcribe
 from voice.text_to_speech import speak_to_bytes
+
+load_dotenv()
 
 # ── Query validator ────────────────────────────────────────────────────────
 _FARMING_KEYWORDS = re.compile(
@@ -46,6 +58,409 @@ _INVALID_RESPONSES = {
     "gibberish": "❌ That doesn't look like a valid question. Please ask something about farming, crops, or agriculture.",
     "off-topic": "❌ **Invalid query.** I can only answer questions related to farming, crops, pests, fertilizers, irrigation, or government agricultural schemes like PM-KISAN. Please rephrase your question.",
 }
+
+
+def _fetch_json(url: str) -> dict:
+    with urlopen(url, timeout=15) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_weather_forecast(location: str, days: int) -> dict:
+    location = location.strip()
+    if not location:
+        raise ValueError("Location cannot be empty.")
+
+    geo_query = urlencode({"name": location, "count": 1, "language": "en", "format": "json"})
+    geo_url = f"https://geocoding-api.open-meteo.com/v1/search?{geo_query}"
+    geo_data = _fetch_json(geo_url)
+
+    results = geo_data.get("results") or []
+    if not results:
+        raise ValueError("Location not found. Try nearby city or correct spelling.")
+
+    place = results[0]
+    latitude = place["latitude"]
+    longitude = place["longitude"]
+    place_name = ", ".join(
+        part
+        for part in [
+            place.get("name"),
+            place.get("admin1"),
+            place.get("country"),
+        ]
+        if part
+    )
+
+    weather_query = urlencode(
+        {
+            "latitude": latitude,
+            "longitude": longitude,
+            "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max",
+            "timezone": "auto",
+            "forecast_days": max(1, min(days, 16)),
+        }
+    )
+    weather_url = f"https://api.open-meteo.com/v1/forecast?{weather_query}"
+    weather_data = _fetch_json(weather_url)
+    daily = weather_data.get("daily")
+    if not daily:
+        raise RuntimeError("Forecast service returned incomplete data. Please try again.")
+
+    dates = daily.get("time", [])
+    tmax = daily.get("temperature_2m_max", [])
+    tmin = daily.get("temperature_2m_min", [])
+    rain_mm = daily.get("precipitation_sum", [])
+    rain_prob = daily.get("precipitation_probability_max", [])
+    wind = daily.get("wind_speed_10m_max", [])
+
+    horizon = min(days, len(dates), len(tmax), len(tmin), len(rain_mm), len(rain_prob), len(wind))
+    forecast = []
+    for i in range(horizon):
+        forecast.append(
+            {
+                "date": dates[i],
+                "temp_max": tmax[i],
+                "temp_min": tmin[i],
+                "rain_mm": rain_mm[i],
+                "rain_prob": rain_prob[i],
+                "wind_kmh": wind[i],
+            }
+        )
+
+    return {
+        "location_name": place_name,
+        "lat": latitude,
+        "lon": longitude,
+        "forecast": forecast,
+        "provider": "open-meteo",
+    }
+
+
+def _weather_advice(forecast: list[dict]) -> str:
+    if not forecast:
+        return "No forecast data available to generate advisory."
+
+    avg_rain_prob = sum(day["rain_prob"] for day in forecast) / len(forecast)
+    total_rain = sum(day["rain_mm"] for day in forecast)
+    max_temp = max(day["temp_max"] for day in forecast)
+    max_wind = max(day["wind_kmh"] for day in forecast)
+
+    tips = []
+    if avg_rain_prob >= 60 or total_rain >= 25:
+        tips.append("Rain likely: reduce irrigation and avoid fertilizer spray just before expected rain.")
+    elif avg_rain_prob <= 25 and total_rain < 5:
+        tips.append("Dry window expected: plan irrigation cycles and conserve soil moisture with mulching.")
+
+    if max_temp >= 35:
+        tips.append("High temperature risk: irrigate during early morning/evening and monitor crop stress.")
+
+    if max_wind >= 25:
+        tips.append("Strong wind expected: avoid pesticide spraying during peak wind hours.")
+
+    if not tips:
+        tips.append("Weather looks moderate. Continue regular irrigation and crop monitoring schedule.")
+
+    return "\n\n".join(f"- {tip}" for tip in tips)
+
+
+_PERISHABLE_CROPS = {"Tomato", "Onion", "Potato", "Cabbage", "Cauliflower"}
+_WINDOWS = [0, 7, 14, 21, 30]
+_PRICE_DATA_CSV = "data/mandi_prices_daily_2015_2025.csv"
+
+
+@st.cache_data(ttl=1200, show_spinner=False)
+def get_openweather_7day(location: str, api_key: str) -> dict:
+    if not api_key:
+        raise ValueError("OPENWEATHER_API_KEY is missing in .env")
+
+    geo_query = urlencode({"q": location.strip(), "limit": 1, "appid": api_key})
+    geo_url = f"https://api.openweathermap.org/geo/1.0/direct?{geo_query}"
+    geo_data = _fetch_json(geo_url)
+    if not geo_data:
+        raise ValueError("Location not found in OpenWeatherMap.")
+
+    place = geo_data[0]
+    lat, lon = place["lat"], place["lon"]
+    place_name = ", ".join(
+        part for part in [place.get("name"), place.get("state"), place.get("country")] if part
+    )
+
+    weather_query = urlencode(
+        {
+            "lat": lat,
+            "lon": lon,
+            "exclude": "minutely,hourly,alerts",
+            "units": "metric",
+            "appid": api_key,
+        }
+    )
+    weather_url = f"https://api.openweathermap.org/data/3.0/onecall?{weather_query}"
+    weather_data = _fetch_json(weather_url)
+
+    daily = (weather_data or {}).get("daily") or []
+    if not daily:
+        raise RuntimeError(
+            "OpenWeatherMap daily forecast unavailable. Verify One Call API access for your key."
+        )
+
+    forecast = []
+    for day in daily[:7]:
+        dt = datetime.utcfromtimestamp(day["dt"]).strftime("%Y-%m-%d")
+        forecast.append(
+            {
+                "date": dt,
+                "temp_max": float(day.get("temp", {}).get("max", 0.0)),
+                "temp_min": float(day.get("temp", {}).get("min", 0.0)),
+                "rain_mm": float(day.get("rain", 0.0)),
+                "rain_prob": float(day.get("pop", 0.0) * 100.0),
+                "wind_kmh": float(day.get("wind_speed", 0.0) * 3.6),
+            }
+        )
+
+    return {"location_name": place_name, "lat": lat, "lon": lon, "forecast": forecast}
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_nasa_power_baseline(lat: float, lon: float, lookback_days: int = 30) -> dict:
+    end_date = datetime.utcnow().date() - timedelta(days=1)
+    start_date = end_date - timedelta(days=lookback_days - 1)
+
+    nasa_query = urlencode(
+        {
+            "parameters": "PRECTOTCORR,T2M_MAX,T2M_MIN",
+            "community": "AG",
+            "longitude": f"{lon:.4f}",
+            "latitude": f"{lat:.4f}",
+            "start": start_date.strftime("%Y%m%d"),
+            "end": end_date.strftime("%Y%m%d"),
+            "format": "JSON",
+        }
+    )
+    nasa_url = f"https://power.larc.nasa.gov/api/temporal/daily/point?{nasa_query}"
+    nasa_data = _fetch_json(nasa_url)
+    params = ((nasa_data or {}).get("properties") or {}).get("parameter") or {}
+
+    rainfall_series = [
+        float(v)
+        for v in (params.get("PRECTOTCORR") or {}).values()
+        if v is not None and float(v) >= 0
+    ]
+    tmax_series = [
+        float(v) for v in (params.get("T2M_MAX") or {}).values() if v is not None and float(v) > -90
+    ]
+    tmin_series = [
+        float(v) for v in (params.get("T2M_MIN") or {}).values() if v is not None and float(v) > -90
+    ]
+
+    if not rainfall_series:
+        raise RuntimeError("NASA POWER baseline data unavailable for this location.")
+
+    avg_daily_rain = sum(rainfall_series) / len(rainfall_series)
+    return {
+        "avg_daily_rain_mm": avg_daily_rain,
+        "avg_7d_rain_mm": avg_daily_rain * 7,
+        "avg_tmax_c": (sum(tmax_series) / len(tmax_series)) if tmax_series else None,
+        "avg_tmin_c": (sum(tmin_series) / len(tmin_series)) if tmin_series else None,
+    }
+
+
+def _fuse_weather_risk(crop: str, owm_forecast: list[dict], nasa_baseline: dict) -> dict:
+    total_rain = sum(day["rain_mm"] for day in owm_forecast)
+    heavy_rain_days = sum(1 for day in owm_forecast if day["rain_mm"] > 50)
+    hot_days = sum(1 for day in owm_forecast if day["temp_max"] >= 35)
+    windy_days = sum(1 for day in owm_forecast if day["wind_kmh"] >= 30)
+
+    baseline_7d_rain = nasa_baseline.get("avg_7d_rain_mm", 0.0)
+    rain_anomaly = total_rain - baseline_7d_rain
+
+    risk_score = (
+        heavy_rain_days * 24
+        + hot_days * 8
+        + windy_days * 6
+        + max(0.0, rain_anomaly) * 0.35
+    )
+    if crop in _PERISHABLE_CROPS:
+        risk_score *= 1.15
+    risk_score = max(0.0, min(100.0, risk_score))
+
+    penalty_pct = min(0.40, 0.04 + (risk_score / 100.0) * 0.22)
+
+    alerts = []
+    if heavy_rain_days > 0 and crop in _PERISHABLE_CROPS:
+        alerts.append(
+            "⚠️ Rainfall > 50 mm/24h detected in 7-day outlook. Immediate sell signal for perishables."
+        )
+    if rain_anomaly > 20:
+        alerts.append("⚠️ Rainfall expected above climate baseline (NASA POWER).")
+    if hot_days >= 2:
+        alerts.append("⚠️ Heat stress window likely for crops in open fields.")
+    if windy_days >= 2:
+        alerts.append("⚠️ Strong wind conditions may increase handling/logistics loss risk.")
+
+    if not alerts:
+        alerts.append("✅ No major weather shock detected in next 7 days.")
+
+    return {
+        "score": risk_score,
+        "penalty_pct": penalty_pct,
+        "alerts": alerts,
+        "total_rain_mm_7d": total_rain,
+        "baseline_rain_mm_7d": baseline_7d_rain,
+        "rain_anomaly_mm": rain_anomaly,
+        "heavy_rain_days": heavy_rain_days,
+    }
+
+
+def _base_trend_per_7d(crop: str) -> float:
+    trend_map = {
+        "Wheat": 0.012,
+        "Rice": 0.010,
+        "Maize": 0.011,
+        "Cotton": 0.014,
+        "Soybean": 0.013,
+        "Tomato": -0.020,
+        "Onion": -0.008,
+        "Potato": -0.004,
+    }
+    return trend_map.get(crop, 0.008)
+
+
+@st.cache_resource(show_spinner=False)
+def _get_price_engine() -> CropPriceForecastingEngine:
+    return CropPriceForecastingEngine(_PRICE_DATA_CSV)
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_engine_price_forecast(crop: str, mandi: str) -> dict:
+    engine = _get_price_engine()
+    result = engine.forecast_crop_mandi(crop=crop, mandi=mandi)
+    return {
+        "forecast": result.forecast,
+        "lower_ci": result.lower_ci,
+        "upper_ci": result.upper_ci,
+        "weights": result.model_weights,
+        "confidence": result.confidence,
+    }
+
+
+def _get_secret_or_env(key: str, default: str = "") -> str:
+    try:
+        value = st.secrets.get(key, default)
+    except (StreamlitSecretNotFoundError, FileNotFoundError, KeyError):
+        value = default
+    except Exception:
+        value = default
+
+    return str(value).strip() if value else os.getenv(key, default)
+
+
+def _looks_like_placeholder_api_key(value: str) -> bool:
+    if not value:
+        return True
+    v = value.strip().lower()
+    return (
+        "your_openweathermap_api_key" in v
+        or "replace_me" in v
+        or v in {"none", "null", "changeme", "test"}
+    )
+
+
+def _get_hyperlocal_weather(location: str, preferred_api_key: str) -> dict:
+    """Try OpenWeatherMap first (if usable), then fallback to Open-Meteo."""
+    api_key = (preferred_api_key or "").strip()
+    if api_key and not _looks_like_placeholder_api_key(api_key):
+        try:
+            weather = get_openweather_7day(location, api_key)
+            weather["provider"] = "openweathermap"
+            return weather
+        except HTTPError as http_exc:
+            if http_exc.code not in {401, 403}:
+                raise
+        except Exception:
+            pass
+
+    # fallback, no key required
+    return get_weather_forecast(location, 7)
+
+
+def optimize_sell_windows(
+    crop: str,
+    current_price: float,
+    quantity_qtl: float,
+    storage_cost_per_day: float,
+    transport_cost: float,
+    weather_risk: dict,
+    model_forecast: Optional[dict] = None,
+) -> dict:
+    trend_per_7d = _base_trend_per_7d(crop)
+    risk_mult_base = 1.25 if crop in _PERISHABLE_CROPS else 1.0
+    rows = []
+
+    for window in _WINDOWS:
+        trend_factor = 1.0 + trend_per_7d * (window / 7.0)
+        expected_price = max(0.0, current_price * trend_factor)
+
+        if model_forecast:
+            if window == 0:
+                expected_price = float(current_price)
+            elif window in model_forecast:
+                expected_price = float(model_forecast[window])
+            elif window == 21 and 14 in model_forecast and 30 in model_forecast:
+                expected_price = float(model_forecast[14] + (model_forecast[30] - model_forecast[14]) * ((21 - 14) / (30 - 14)))
+
+        risk_multiplier = risk_mult_base * (1.0 + window / 30.0)
+        weather_penalty_per_qtl = current_price * weather_risk["penalty_pct"] * risk_multiplier
+        storage_total = quantity_qtl * storage_cost_per_day * window
+        gross_income = expected_price * quantity_qtl
+        weather_penalty_total = weather_penalty_per_qtl * quantity_qtl
+        net_income = gross_income - storage_total - transport_cost - weather_penalty_total
+
+        rows.append(
+            {
+                "window_days": window,
+                "expected_price": expected_price,
+                "gross_income": gross_income,
+                "storage_cost": storage_total,
+                "transport_cost": transport_cost,
+                "weather_penalty": weather_penalty_total,
+                "net_income": net_income,
+            }
+        )
+
+    best = max(rows, key=lambda x: x["net_income"])
+    now_row = next(row for row in rows if row["window_days"] == 0)
+    impact = best["net_income"] - now_row["net_income"]
+
+    heavy_rain_alert = weather_risk.get("heavy_rain_days", 0) > 0 and crop in _PERISHABLE_CROPS
+    if heavy_rain_alert and best["window_days"] > 0:
+        recommendation = "Partial Sell"
+        rationale = "Severe rain alert for perishables: sell major portion now and hold a smaller portion."
+    elif best["window_days"] == 0:
+        recommendation = "Sell Now"
+        rationale = "Immediate sale gives the highest expected net income after costs and weather penalties."
+    elif impact <= max(500.0, 0.03 * max(1.0, now_row["net_income"])):
+        recommendation = "Partial Sell"
+        rationale = "Future gain is limited versus now; partial sell balances liquidity and upside."
+    else:
+        recommendation = "Hold"
+        rationale = f"Expected net income is highest if sold after {best['window_days']} days."
+
+    confidence = 78.0
+    confidence += 8.0 if len(rows) == 5 else 0.0
+    confidence += 6.0 if weather_risk["score"] < 40 else -8.0
+    confidence += 4.0 if abs(impact) > 1000 else -4.0
+    confidence = max(40.0, min(95.0, confidence))
+
+    return {
+        "rows": rows,
+        "best": best,
+        "now": now_row,
+        "income_impact": impact,
+        "recommendation": recommendation,
+        "rationale": rationale,
+        "confidence": confidence,
+    }
 
 st.set_page_config(page_title="Farmer Advisory Assistant", page_icon="🌾", layout="wide", initial_sidebar_state="collapsed")
 
@@ -312,7 +727,7 @@ css = """
     }
     div[data-testid="stChatInput"] button:hover { transform: scale(1.06); }
     div[data-testid="stChatInput"] button svg { display: none !important; }
-    div[data-testid="stChatInput"] button::before { content: ""; color: #fff; font-size: 1rem; }
+    div[data-testid="stChatInput"] button::before { content: "➤"; color: #fff; font-size: 1rem; }
 
     [data-testid="stSidebar"] {
         background: #f8fafc !important;
@@ -382,9 +797,55 @@ css = """
         background: linear-gradient(135deg,#dcfce7,#bbf7d0) !important;
     }
     .sidebar-mic button svg { display: none !important; }
-    .sidebar-mic button::before { content: ""; font-size: 1.05rem; line-height: 1; }
+    .sidebar-mic button::before { content: "🎤"; font-size: 1.05rem; line-height: 1; }
 
     .stSpinner > div { border-block-start-color: var(--green-600) !important; }
+
+    .page-card {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        padding: 1rem;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        margin-block-start: 0.35rem;
+    }
+
+    [data-testid="stRadio"] [role="radiogroup"] {
+        gap: 0.28rem;
+    }
+    [data-testid="stRadio"] [role="radiogroup"] label {
+        border-radius: 10px;
+        border: 1px solid #dcfce7;
+        background: #f0fdf4;
+        padding: 0.38rem 0.55rem;
+        min-block-size: 42px;
+    }
+    [data-testid="stRadio"] [role="radiogroup"] label:hover {
+        border-color: #86efac;
+    }
+    [data-testid="stRadio"] [role="radiogroup"] p {
+        font-size: 0.9rem !important;
+        color: #14532d !important;
+        font-weight: 500;
+    }
+
+    [data-testid="stForm"] {
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 0.8rem;
+        background: #ffffff;
+    }
+
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stSelectbox"] [data-baseweb="select"] > div {
+        min-block-size: 44px !important;
+        border-radius: 10px !important;
+    }
+
+    div[data-testid="stFormSubmitButton"] button,
+    div[data-testid="stButton"] button {
+        min-block-size: 44px !important;
+    }
 
     @media (max-width: 900px) {
         .main .block-container {
@@ -437,6 +898,27 @@ css = """
             font-size: 0.9rem !important;
             padding-block: 0.7rem !important;
         }
+
+        .page-card {
+            padding: 0.75rem;
+            border-radius: 12px;
+        }
+
+        [data-testid="stRadio"] [role="radiogroup"] label {
+            padding: 0.44rem 0.5rem;
+            min-block-size: 44px;
+        }
+
+        [data-testid="stForm"] {
+            padding: 0.65rem;
+        }
+
+        div[data-testid="stTextInput"] input,
+        div[data-testid="stSelectbox"] [data-baseweb="select"] > div,
+        div[data-testid="stFormSubmitButton"] button,
+        div[data-testid="stButton"] button {
+            font-size: 0.95rem !important;
+        }
     }
 
     @media (max-width: 380px) {
@@ -454,112 +936,320 @@ css = css.replace("__TOPBAR_SUBTEXT__", current_theme["topbar_subtext"])
 
 st.markdown(css, unsafe_allow_html=True)
 
+mic_audio = None
+
 with st.sidebar:
     st.markdown("### Farmer Assistant")
-    st.caption("Chat-style advisory with voice input")
+    st.caption("Use the ☰ hamburger menu to open each module")
 
-    st.session_state.enable_tts = st.toggle(
-        "Read answers aloud",
-        value=st.session_state.enable_tts,
+    st.markdown("#### ☰ Menu")
+    selected_page = st.radio(
+        "Navigation",
+        ["Farmer Query", "Weather Prediction", "Price Prediction"],
+        label_visibility="collapsed",
     )
 
-    st.markdown("#### Quick prompts")
-    quick_questions = [
-        "How to control fall armyworm in maize?",
-        "Best fertilizer schedule for paddy",
-        "How often should I irrigate tomato in summer?",
-        "PM-KISAN eligibility and required documents",
-    ]
+    if selected_page == "Farmer Query":
+        st.session_state.enable_tts = st.toggle(
+            "Read answers aloud",
+            value=st.session_state.enable_tts,
+        )
 
-    for idx, item in enumerate(quick_questions, start=1):
-        if st.button(item, key=f"quick_{idx}", use_container_width=True):
-            st.session_state.pending_prompt = item
+        st.markdown("#### Quick prompts")
+        quick_questions = [
+            "How to control fall armyworm in maize?",
+            "Best fertilizer schedule for paddy",
+            "How often should I irrigate tomato in summer?",
+            "PM-KISAN eligibility and required documents",
+        ]
+
+        for idx, item in enumerate(quick_questions, start=1):
+            if st.button(item, key=f"quick_{idx}", use_container_width=True):
+                st.session_state.pending_prompt = item
+                st.rerun()
+
+        st.markdown("#### Voice query")
+        st.markdown("<div class='sidebar-mic'>", unsafe_allow_html=True)
+        mic_audio = st.audio_input(" ", key="mic_input")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        if st.button("New chat", use_container_width=True):
+            st.session_state.messages = _seed_welcome_message()
+            st.session_state.pending_prompt = None
+            st.session_state.last_mic_hash = None
             st.rerun()
 
-    st.markdown("#### Voice query")
-    st.markdown("<div class='sidebar-mic'>", unsafe_allow_html=True)
-    mic_audio = st.audio_input(" ", key="mic_input")
-    st.markdown("</div>", unsafe_allow_html=True)
+if selected_page == "Farmer Query":
+    st.markdown(
+        """
+        <div class="chat-topbar">
+            <span class="topbar-icon">🌾</span>
+            <div class="topbar-text">
+                <h2>AI Farmer Advisory Chat</h2>
+                <p>Ask about crops, pests, fertilizer, irrigation &amp; govt. schemes</p>
+            </div>
+            <span class="topbar-status">Online</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    if st.button("New chat", use_container_width=True):
-        st.session_state.messages = _seed_welcome_message()
+    chat_container = st.container(border=False)
+    with chat_container:
+        st.markdown("<div class='chat-scroll'>", unsafe_allow_html=True)
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+                if message["role"] == "assistant" and message.get("audio"):
+                    st.audio(message["audio"], format="audio/mp3")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    if mic_audio is not None:
+        audio_bytes = mic_audio.getvalue()
+        audio_hash = hashlib.md5(audio_bytes).hexdigest()
+        if st.session_state.last_mic_hash != audio_hash:
+            with st.spinner("Transcribing..."):
+                try:
+                    transcribed = transcribe(mic_audio)
+                    st.session_state.last_mic_hash = audio_hash
+                    if transcribed:
+                        st.session_state.pending_prompt = transcribed
+                        st.rerun()
+                    else:
+                        st.warning("Could not detect speech. Try again.")
+                except Exception as exc:
+                    st.session_state.last_mic_hash = audio_hash
+                    st.error(f"Voice transcription failed: {exc}")
+
+    # st.chat_input is Enter-to-send by default and includes a built-in send button.
+    typed_prompt = st.chat_input("Ask your farming question...")
+
+    prompt = typed_prompt or st.session_state.pending_prompt
+    if prompt:
         st.session_state.pending_prompt = None
-        st.session_state.last_mic_hash = None
+
+        st.session_state.messages.append({"role": "user", "content": prompt, "audio": None})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            valid, reason = _is_valid_query(prompt)
+            if not valid:
+                answer = _INVALID_RESPONSES.get(reason, _INVALID_RESPONSES["off-topic"])
+            else:
+                with st.spinner("Preparing advisory..."):
+                    answer = ask(prompt)
+
+            final_answer = answer
+
+            st.markdown(final_answer)
+
+            answer_audio = None
+            if st.session_state.enable_tts and final_answer:
+                try:
+                    answer_audio = speak_to_bytes(final_answer, lang="en")
+                    st.audio(answer_audio, format="audio/mp3")
+                except Exception as exc:
+                    st.warning(f"Could not generate voice output: {exc}")
+
+        st.session_state.messages.append(
+            {"role": "assistant", "content": final_answer, "audio": answer_audio}
+        )
         st.rerun()
 
-st.markdown(
-    """
-    <div class="chat-topbar">
-        <span class="topbar-icon"></span>
-        <div class="topbar-text">
-            <h2>AI Farmer Advisory Chat</h2>
-            <p>Ask about crops, pests, fertilizer, irrigation &amp; govt. schemes</p>
+elif selected_page == "Weather Prediction":
+    st.markdown(
+        """
+        <div class="chat-topbar">
+            <span class="topbar-icon">⛅</span>
+            <div class="topbar-text">
+                <h2>Weather Prediction</h2>
+                <p>Enter your location to open weather insights for farming decisions</p>
+            </div>
+            <span class="topbar-status">Online</span>
         </div>
-        <span class="topbar-status">Online</span>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+        """,
+        unsafe_allow_html=True,
+    )
 
-chat_container = st.container(border=False)
-with chat_container:
-    st.markdown("<div class='chat-scroll'>", unsafe_allow_html=True)
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-            if message["role"] == "assistant" and message.get("audio"):
-                st.audio(message["audio"], format="audio/mp3")
+    st.markdown("<div class='page-card'>", unsafe_allow_html=True)
+    st.markdown("### Weather Prediction")
+    with st.form("weather_form"):
+        location = st.text_input("Village / City", placeholder="e.g., Mysuru")
+        days = st.selectbox("Forecast window", ["3 Days", "7 Days", "10 Days"], index=1)
+        weather_submit = st.form_submit_button("Open Weather Prediction", use_container_width=True)
+
+    if weather_submit:
+        if not location.strip():
+            st.warning("Please enter a location.")
+        else:
+            day_count = int(days.split()[0])
+            with st.spinner("Fetching live weather forecast..."):
+                try:
+                    weather = get_weather_forecast(location, day_count)
+                    forecast = weather["forecast"]
+
+                    st.success(f"Forecast loaded for {weather['location_name']} ({day_count} days).")
+
+                    if forecast:
+                        first = forecast[0]
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Today Max Temp", f"{first['temp_max']:.1f}°C")
+                        c2.metric("Today Rain Chance", f"{first['rain_prob']:.0f}%")
+                        c3.metric("Today Rainfall", f"{first['rain_mm']:.1f} mm")
+
+                        st.markdown("#### Daily forecast")
+                        st.dataframe(
+                            [
+                                {
+                                    "Date": day["date"],
+                                    "Temp Min (°C)": round(day["temp_min"], 1),
+                                    "Temp Max (°C)": round(day["temp_max"], 1),
+                                    "Rainfall (mm)": round(day["rain_mm"], 1),
+                                    "Rain Probability (%)": round(day["rain_prob"], 0),
+                                    "Wind (km/h)": round(day["wind_kmh"], 1),
+                                }
+                                for day in forecast
+                            ],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                        st.markdown("#### Farming advisory")
+                        st.info(_weather_advice(forecast))
+                except Exception as exc:
+                    st.error(f"Weather prediction failed: {exc}")
     st.markdown("</div>", unsafe_allow_html=True)
 
-if mic_audio is not None:
-    audio_bytes = mic_audio.getvalue()
-    audio_hash = hashlib.md5(audio_bytes).hexdigest()
-    if st.session_state.last_mic_hash != audio_hash:
-        with st.spinner("Transcribing..."):
-            try:
-                transcribed = transcribe(mic_audio)
-                st.session_state.last_mic_hash = audio_hash
-                if transcribed:
-                    st.session_state.pending_prompt = transcribed
-                    st.rerun()
-                else:
-                    st.warning("Could not detect speech. Try again.")
-            except Exception as exc:
-                st.session_state.last_mic_hash = audio_hash
-                st.error(f"Voice transcription failed: {exc}")
-
-# st.chat_input is Enter-to-send by default and includes a built-in send button.
-typed_prompt = st.chat_input("Ask your farming question...")
-
-prompt = typed_prompt or st.session_state.pending_prompt
-if prompt:
-    st.session_state.pending_prompt = None
-
-    st.session_state.messages.append({"role": "user", "content": prompt, "audio": None})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    with st.chat_message("assistant"):
-        valid, reason = _is_valid_query(prompt)
-        if not valid:
-            answer = _INVALID_RESPONSES.get(reason, _INVALID_RESPONSES["off-topic"])
-        else:
-            with st.spinner("Preparing advisory..."):
-                answer = ask(prompt)
-
-        final_answer = answer
-
-        st.markdown(final_answer)
-
-        answer_audio = None
-        if st.session_state.enable_tts and final_answer:
-            try:
-                answer_audio = speak_to_bytes(final_answer, lang="en")
-                st.audio(answer_audio, format="audio/mp3")
-            except Exception as exc:
-                st.warning(f"Could not generate voice output: {exc}")
-
-    st.session_state.messages.append(
-        {"role": "assistant", "content": final_answer, "audio": answer_audio}
+elif selected_page == "Price Prediction":
+    st.markdown(
+        """
+        <div class="chat-topbar">
+            <span class="topbar-icon">📈</span>
+            <div class="topbar-text">
+                <h2>Price Prediction</h2>
+                <p>Select crop and market to open predicted mandi prices</p>
+            </div>
+            <span class="topbar-status">Online</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    st.rerun()
+
+    st.markdown("<div class='page-card'>", unsafe_allow_html=True)
+    st.markdown("### Price Prediction")
+    with st.form("price_form"):
+        crop = st.selectbox("Crop", ["Wheat", "Rice", "Maize", "Cotton", "Soybean", "Tomato", "Onion", "Potato"])
+        mandi = st.selectbox("Market (Mandi)", ["Delhi", "Jaipur", "Lucknow", "Indore", "Nagpur"])
+        location = st.text_input("Hyperlocal location (Village/City)", placeholder="e.g., Mysuru")
+        current_price = st.number_input("Current market price (₹/qtl)", min_value=100.0, value=2200.0, step=50.0)
+        quantity_qtl = st.number_input("Quantity to sell (qtl)", min_value=1.0, value=20.0, step=1.0)
+        storage_cost_per_day = st.number_input("Storage cost (₹/qtl/day)", min_value=0.0, value=3.0, step=0.5)
+        transport_cost = st.number_input("Transport cost total (₹)", min_value=0.0, value=1200.0, step=100.0)
+        horizon = st.selectbox("Prediction horizon", ["7 Days", "14 Days", "30 Days"], index=0)
+        price_submit = st.form_submit_button("Open Price Prediction", use_container_width=True)
+
+    if price_submit:
+        if not location.strip():
+            st.warning("Please enter a location for weather-integrated advice.")
+        else:
+            owm_key = _get_secret_or_env("OPENWEATHER_API_KEY", "")
+
+            if not owm_key:
+                st.error("Missing OPENWEATHER_API_KEY. Add it in your .env and restart the app.")
+            else:
+                with st.spinner("Fusing price forecast with OpenWeatherMap + NASA POWER weather signals..."):
+                    try:
+                        price_engine = None
+                        model_forecast = None
+                        model_lower = None
+                        model_upper = None
+                        model_weights = None
+
+                        try:
+                            price_engine = get_engine_price_forecast(crop, mandi)
+                            model_forecast = price_engine["forecast"]
+                            model_lower = price_engine["lower_ci"]
+                            model_upper = price_engine["upper_ci"]
+                            model_weights = price_engine["weights"]
+                        except Exception as model_exc:
+                            st.warning(
+                                "Advanced forecasting engine unavailable for this crop/mandi yet. "
+                                "Using trend-based fallback for optimization. "
+                                f"(Details: {model_exc})"
+                            )
+
+                        weather = _get_hyperlocal_weather(location, owm_key)
+                        nasa_baseline = get_nasa_power_baseline(weather["lat"], weather["lon"])
+                        risk = _fuse_weather_risk(crop, weather["forecast"], nasa_baseline)
+                        result = optimize_sell_windows(
+                            crop=crop,
+                            current_price=float(current_price),
+                            quantity_qtl=float(quantity_qtl),
+                            storage_cost_per_day=float(storage_cost_per_day),
+                            transport_cost=float(transport_cost),
+                            weather_risk=risk,
+                            model_forecast=model_forecast,
+                        )
+
+                        provider_label = "OpenWeatherMap" if weather.get("provider") == "openweathermap" else "Open-Meteo"
+                        st.success(
+                            f"Weather-integrated sell advisory for {crop} | {weather['location_name']} ({mandi})"
+                        )
+                        st.caption(f"Weather source: {provider_label} + NASA POWER baseline")
+
+                        if model_forecast and model_lower and model_upper and model_weights:
+                            st.markdown("#### Crop price forecasting engine")
+                            f7, f14, f30 = model_forecast[7], model_forecast[14], model_forecast[30]
+                            c1p, c2p, c3p = st.columns(3)
+                            c1p.metric("7-day price", f"₹{f7:,.0f}", help=f"95% CI: ₹{model_lower[7]:,.0f} - ₹{model_upper[7]:,.0f}")
+                            c2p.metric("14-day price", f"₹{f14:,.0f}", help=f"95% CI: ₹{model_lower[14]:,.0f} - ₹{model_upper[14]:,.0f}")
+                            c3p.metric("30-day price", f"₹{f30:,.0f}", help=f"95% CI: ₹{model_lower[30]:,.0f} - ₹{model_upper[30]:,.0f}")
+                            st.caption(
+                                "Model weights (optimized via CV): "
+                                f"Prophet {model_weights['prophet']:.2f}, "
+                                f"LSTM {model_weights['lstm']:.2f}, "
+                                f"XGBoost {model_weights['xgboost']:.2f}"
+                            )
+                        st.markdown("#### Alert engine")
+                        for alert in risk["alerts"]:
+                            st.write(alert)
+
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Weather Risk Score", f"{risk['score']:.0f}/100")
+                        c2.metric("7-day Rain", f"{risk['total_rain_mm_7d']:.1f} mm")
+                        c3.metric("Rain vs Baseline", f"{risk['rain_anomaly_mm']:+.1f} mm")
+
+                        st.markdown("#### Profit optimizer (0/7/14/21/30 days)")
+                        st.dataframe(
+                            [
+                                {
+                                    "Sell After (Days)": row["window_days"],
+                                    "Expected Price (₹/qtl)": round(row["expected_price"], 2),
+                                    "Storage Cost (₹)": round(row["storage_cost"], 2),
+                                    "Transport Cost (₹)": round(row["transport_cost"], 2),
+                                    "Weather Penalty (₹)": round(row["weather_penalty"], 2),
+                                    "Net Income (₹)": round(row["net_income"], 2),
+                                }
+                                for row in result["rows"]
+                            ],
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+
+                        st.markdown("#### Recommendation")
+                        st.info(
+                            (
+                                f"**{result['recommendation']}**\n\n"
+                                f"{result['rationale']}\n\n"
+                                f"Expected income impact vs selling now: **₹{result['income_impact']:+,.0f}**\n\n"
+                                f"Confidence score: **{(0.6 * result['confidence'] + 0.4 * (price_engine['confidence'] if price_engine else 70.0)):.0f}/100**"
+                            )
+                        )
+                    except Exception as exc:
+                        st.error(
+                            "Sell advisor failed. Ensure price dataset exists at "
+                            f"`{_PRICE_DATA_CSV}` with columns date,crop,mandi,price (optional: rainfall_index,msp_floor). "
+                            f"Details: {exc}"
+                        )
+    st.markdown("</div>", unsafe_allow_html=True)

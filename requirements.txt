@@ -17,3 +17,8 @@ indic-transliteration
 gtts
 python-dotenv
 imageio-ffmpeg
+pandas
+numpy
+scikit-learn
+xgboost
+prophet

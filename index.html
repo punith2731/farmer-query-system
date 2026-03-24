@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Crop Price Forecasting Dashboard" />
+  <title>Crop Price Forecasting Dashboard</title>
+
+  <!-- Fonts + Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- Chart.js (single lightweight chart dependency) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js" defer></script>
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <!-- Loading overlay while predictions are fetched -->
+  <div id="loadingOverlay" class="loading-overlay" role="status" aria-live="polite" aria-label="Loading predictions">
+    <div class="spinner" aria-hidden="true"></div>
+    <p>Fetching latest predictions...</p>
+  </div>
+
+  <header class="topbar" aria-label="Top navigation">
+    <button id="menuToggle" class="icon-btn menu-toggle" aria-label="Toggle sidebar" aria-expanded="false" aria-controls="sidebar">
+      <i class="fa-solid fa-bars"></i>
+    </button>
+
+    <div class="brand">
+      <div class="brand-logo" aria-hidden="true">
+        <i class="fa-solid fa-seedling"></i>
+      </div>
+      <div>
+        <h1>Crop Price Forecasting</h1>
+        <p class="subtitle">Analytics Dashboard</p>
+      </div>
+    </div>
+
+    <nav class="top-menu" aria-label="Main menu">
+      <a href="#" class="menu-link">Overview</a>
+      <a href="#" class="menu-link">Forecasts</a>
+      <a href="#" class="menu-link">Reports</a>
+    </nav>
+
+    <button id="themeToggle" class="icon-btn" aria-label="Toggle dark mode" title="Toggle dark mode">
+      <i class="fa-solid fa-moon"></i>
+    </button>
+  </header>
+
+  <div class="dashboard-shell">
+    <aside id="sidebar" class="sidebar" aria-label="Sidebar filters">
+      <div class="sidebar-card glass-card">
+        <h2><i class="fa-solid fa-filter"></i> Filters</h2>
+
+        <div class="field-group">
+          <label for="cropSelect">Select Crop</label>
+          <select id="cropSelect" name="crop" aria-label="Select crop">
+            <option value="wheat">Wheat</option>
+            <option value="rice">Rice</option>
+            <option value="maize">Maize</option>
+            <option value="cotton">Cotton</option>
+            <option value="soybean">Soybean</option>
+          </select>
+        </div>
+
+        <div class="field-group">
+          <label for="mandiSelect">Select Mandi</label>
+          <select id="mandiSelect" name="mandi" aria-label="Select mandi">
+            <option value="delhi">Delhi Mandi</option>
+            <option value="jaipur">Jaipur Mandi</option>
+            <option value="lucknow">Lucknow Mandi</option>
+            <option value="indore">Indore Mandi</option>
+            <option value="nagpur">Nagpur Mandi</option>
+          </select>
+        </div>
+
+        <button id="refreshBtn" class="primary-btn" type="button">
+          <i class="fa-solid fa-rotate"></i>
+          Refresh Prediction
+        </button>
+      </div>
+    </aside>
+
+    <main class="main-content" aria-label="Forecast dashboard content">
+      <section class="forecast-grid" aria-label="Forecast summary cards">
+        <article class="forecast-card glass-card">
+          <div class="card-head">
+            <h3>7-day Forecast</h3>
+            <i class="fa-solid fa-calendar-week"></i>
+          </div>
+          <p class="price" id="price7">₹2,180 / qtl</p>
+          <p class="delta positive"><i class="fa-solid fa-arrow-trend-up"></i> +2.3%</p>
+        </article>
+
+        <article class="forecast-card glass-card">
+          <div class="card-head">
+            <h3>14-day Forecast</h3>
+            <i class="fa-solid fa-calendar-days"></i>
+          </div>
+          <p class="price" id="price14">₹2,240 / qtl</p>
+          <p class="delta positive"><i class="fa-solid fa-arrow-trend-up"></i> +3.8%</p>
+        </article>
+
+        <article class="forecast-card glass-card">
+          <div class="card-head">
+            <h3>30-day Forecast</h3>
+            <i class="fa-solid fa-calendar"></i>
+          </div>
+          <p class="price" id="price30">₹2,360 / qtl</p>
+          <p class="delta negative"><i class="fa-solid fa-arrow-trend-down"></i> -1.2% volatility risk</p>
+        </article>
+      </section>
+
+      <section class="chart-grid">
+        <article class="chart-card glass-card">
+          <div class="card-head">
+            <h3>Price Trend (Last 30 Days)</h3>
+            <span class="badge">Live</span>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="priceTrendChart" aria-label="Line chart showing crop price trend"></canvas>
+          </div>
+        </article>
+
+        <article class="chart-card glass-card">
+          <div class="card-head">
+            <h3>Confidence Interval</h3>
+            <i class="fa-solid fa-chart-area"></i>
+          </div>
+          <div class="confidence-wrap" aria-label="Confidence interval visualization">
+            <div class="interval-scale">
+              <span>Low</span>
+              <span>Expected</span>
+              <span>High</span>
+            </div>
+            <div class="interval-bar">
+              <div class="range"></div>
+              <div class="marker" id="confidenceMarker" title="Expected price"></div>
+            </div>
+            <p class="confidence-text" id="confidenceText">Expected: ₹2,240 (95% CI: ₹2,110 – ₹2,370)</p>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
