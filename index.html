@@ -25,6 +25,9 @@
     <p>Fetching latest predictions...</p>
   </div>
 
+  <div class="bg-orb orb-1" aria-hidden="true"></div>
+  <div class="bg-orb orb-2" aria-hidden="true"></div>
+
   <header class="topbar" aria-label="Top navigation">
     <button id="menuToggle" class="icon-btn menu-toggle" aria-label="Toggle sidebar" aria-expanded="false" aria-controls="sidebar">
       <i class="fa-solid fa-bars"></i>
@@ -35,8 +38,8 @@
         <i class="fa-solid fa-seedling"></i>
       </div>
       <div>
-        <h1>Crop Price Forecasting</h1>
-        <p class="subtitle">Analytics Dashboard</p>
+        <h1>Farmer Query System</h1>
+        <p class="subtitle">Smart Crop Price Forecasting</p>
       </div>
     </div>
 
@@ -55,6 +58,8 @@
     <aside id="sidebar" class="sidebar" aria-label="Sidebar filters">
       <div class="sidebar-card glass-card">
         <h2><i class="fa-solid fa-filter"></i> Filters</h2>
+
+        <p class="helper-text">Pick your crop and mandi to get refreshed forecasts instantly.</p>
 
         <div class="field-group">
           <label for="cropSelect">Select Crop</label>
@@ -86,6 +91,28 @@
     </aside>
 
     <main class="main-content" aria-label="Forecast dashboard content">
+      <section class="hero-card glass-card" aria-label="Dashboard highlight">
+        <div>
+          <p class="eyebrow">MARKET PULSE</p>
+          <h2>Better timing, better returns</h2>
+          <p class="hero-copy">Track likely mandi price movement over 7, 14, and 30 days and plan your selling window with confidence.</p>
+        </div>
+        <div class="hero-meta" aria-label="quick metrics">
+          <article>
+            <span>Model Confidence</span>
+            <strong>95%</strong>
+          </article>
+          <article>
+            <span>Signals Updated</span>
+            <strong>Daily</strong>
+          </article>
+          <article>
+            <span>Coverage</span>
+            <strong>5 Mandis</strong>
+          </article>
+        </div>
+      </section>
+
       <section class="forecast-grid" aria-label="Forecast summary cards">
         <article class="forecast-card glass-card">
           <div class="card-head">

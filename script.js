@@ -72,6 +72,10 @@ function buildTrendChart(basePrice) {
   const canvas = document.getElementById("priceTrendChart");
   const labels = createDaysLabels(30);
   const series = generateTrendSeries(basePrice, 30);
+  const styles = getComputedStyle(document.body);
+  const primaryColor = styles.getPropertyValue("--primary").trim() || "#2f80ed";
+  const borderColor = styles.getPropertyValue("--border").trim() || "rgba(16, 42, 67, 0.15)";
+  const mutedColor = styles.getPropertyValue("--muted").trim() || "#486581";
 
   if (trendChart) {
     trendChart.destroy();
@@ -85,7 +89,7 @@ function buildTrendChart(basePrice) {
         {
           label: "Modal Price (₹/qtl)",
           data: series,
-          borderColor: "#2f80ed",
+          borderColor: primaryColor,
           backgroundColor: "rgba(47, 128, 237, 0.14)",
           fill: true,
           tension: 0.35,
@@ -115,11 +119,20 @@ function buildTrendChart(basePrice) {
       },
       scales: {
         x: {
-          grid: { display: false }
+          grid: {
+            display: false
+          },
+          ticks: {
+            color: mutedColor
+          }
         },
         y: {
           beginAtZero: false,
+          grid: {
+            color: borderColor
+          },
           ticks: {
+            color: mutedColor,
             callback(value) {
               return `₹${Number(value).toLocaleString("en-IN")}`;
             }
@@ -164,6 +177,13 @@ function setupSidebarToggle() {
       menuToggle.setAttribute("aria-expanded", "false");
     }
   });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && sidebar.classList.contains("open")) {
+      sidebar.classList.remove("open");
+      menuToggle.setAttribute("aria-expanded", "false");
+    }
+  });
 }
 
 function setupThemeToggle() {
@@ -178,6 +198,12 @@ function setupThemeToggle() {
     themeToggle.innerHTML = dark
       ? '<i class="fa-solid fa-sun"></i>'
       : '<i class="fa-solid fa-moon"></i>';
+
+    const selectedCrop = cropSelect.value;
+    const selectedMandi = mandiSelect.value;
+    const mandiFactor = (selectedMandi.charCodeAt(0) % 5) * 0.007;
+    const base = cropBasePrice[selectedCrop] * (1 + mandiFactor);
+    buildTrendChart(base);
   });
 
   if (document.body.classList.contains("dark")) {

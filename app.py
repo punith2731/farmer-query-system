@@ -493,23 +493,29 @@ if "enable_tts" not in st.session_state:
 if "theme_mode" not in st.session_state:
     st.session_state.theme_mode = "Light"
 
+if "selected_page" not in st.session_state:
+    st.session_state.selected_page = "Home"
+
+if "menu_open" not in st.session_state:
+    st.session_state.menu_open = False
+
 _THEMES = {
     "Light": {
-        "app_bg": "#f6f8fb",
-        "topbar_bg": "linear-gradient(135deg, #14532d 0%, #166534 55%, #15803d 100%)",
-        "topbar_text": "#f0fdf4",
-        "topbar_subtext": "#dcfce7",
+        "app_bg": "radial-gradient(circle at 8% 8%, #e0f2fe 0%, #f5f3ff 30%, #fef3c7 68%, #fde68a 100%)",
+        "topbar_bg": "linear-gradient(120deg, #6d28d9 0%, #2563eb 30%, #0ea5e9 55%, #14b8a6 78%, #22c55e 100%)",
+        "topbar_text": "#f8fafc",
+        "topbar_subtext": "#e0f2fe",
         "chat_bg": "#ffffff",
         "composer_bg": "#ffffff",
-        "composer_text": "#1f2937",
-        "composer_placeholder": "#6b7280",
-        "composer_border": "#d1d5db",
+        "composer_text": "#1e1b4b",
+        "composer_placeholder": "#64748b",
+        "composer_border": "#c4b5fd",
     },
     "Dark": {
         "app_bg": "#0b1220",
-        "topbar_bg": "linear-gradient(135deg, #0f3d2b 0%, #0f5132 55%, #0f766e 100%)",
+        "topbar_bg": "linear-gradient(120deg, #312e81 0%, #1d4ed8 35%, #0e7490 65%, #166534 100%)",
         "topbar_text": "#ecfeff",
-        "topbar_subtext": "#d1fae5",
+        "topbar_subtext": "#bae6fd",
         "chat_bg": "#121212",
         "composer_bg": "#1e1e1e",
         "composer_text": "#ffffff",
@@ -525,9 +531,9 @@ css = """
         --chat-input-width: min(1100px, calc(100vw - 1.2rem));
         --composer-bottom: 0.65rem;
         --mic-size: 2.2rem;
-        --green-600: #16a34a;
-        --green-700: #15803d;
-        --green-50: #f0fdf4;
+        --green-600: #7c3aed;
+        --green-700: #2563eb;
+        --green-50: #f3e8ff;
         --radius-pill: 999px;
         --radius-card: 16px;
     }
@@ -546,13 +552,14 @@ css = """
         z-index: 1200 !important;
         position: fixed !important;
         inset-block-start: 0.55rem !important;
-        inset-inline-start: 0.55rem !important;
+        inset-inline-start: auto !important;
+        inset-inline-end: 0.55rem !important;
         inline-size: 2.4rem !important;
         block-size: 2.4rem !important;
         min-inline-size: 44px !important;
         min-block-size: 44px !important;
         border-radius: 8px !important;
-        background: #166534 !important;
+        background: linear-gradient(135deg, #7c3aed, #2563eb) !important;
         border: 1px solid rgba(255,255,255,0.22) !important;
         color: #ffffff !important;
         display: inline-flex !important;
@@ -594,7 +601,7 @@ css = """
         background: __TOPBAR_BG__;
         padding: 0.82rem 1.5rem;
         color: __TOPBAR_TEXT__;
-        box-shadow: 0 2px 16px rgba(15,61,43,0.28);
+        box-shadow: 0 6px 22px rgba(37, 99, 235, 0.34);
         display: flex;
         align-items: center;
         gap: 0.85rem;
@@ -649,7 +656,7 @@ css = """
         inline-size: 0.52rem;
         block-size: 0.52rem;
         border-radius: 50%;
-        background: #4ade80;
+        background: #fde047;
         animation: pulse-dot 2s infinite;
     }
     @keyframes pulse-dot { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
@@ -662,21 +669,21 @@ css = """
         transition: background 0.15s;
     }
     [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
-        background: #f0fdf4 !important;
-        border-color: #bbf7d0 !important;
+        background: linear-gradient(135deg, #ede9fe, #dbeafe) !important;
+        border-color: #c4b5fd !important;
     }
     [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
-        background: #ffffff !important;
-        border-color: #e5e7eb !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        background: linear-gradient(135deg, #ecfeff, #f0fdf4) !important;
+        border-color: #93c5fd !important;
+        box-shadow: 0 3px 10px rgba(37,99,235,0.11);
     }
     [data-testid="stChatMessageAvatarUser"] {
-        background: linear-gradient(135deg, #16a34a, #15803d) !important;
+        background: linear-gradient(135deg, #8b5cf6, #2563eb) !important;
         border-radius: 50% !important;
         color: #fff !important;
     }
     [data-testid="stChatMessageAvatarAssistant"] {
-        background: linear-gradient(135deg, #065f46, #047857) !important;
+        background: linear-gradient(135deg, #0ea5e9, #22c55e) !important;
         border-radius: 50% !important;
         color: #fff !important;
     }
@@ -685,7 +692,7 @@ css = """
     div[data-testid="stBottomBlockContainer"] {
         padding-inline: 0.55rem;
         padding-block-end: var(--composer-bottom);
-        background: linear-gradient(to top, rgba(246,248,251,0.98) 55%, transparent 100%);
+        background: linear-gradient(to top, rgba(237, 233, 254, 0.86) 40%, rgba(224, 242, 254, 0.65) 70%, transparent 100%);
     }
 
     div[data-testid="stChatInput"] {
@@ -696,15 +703,15 @@ css = """
     }
     div[data-testid="stChatInput"] > div {
         border-radius: 30px !important;
-        border: 1.5px solid #d1fae5 !important;
+        border: 1.5px solid #c4b5fd !important;
         background: #ffffff !important;
-        box-shadow: 0 4px 24px rgba(22,163,74,0.10), 0 1px 4px rgba(0,0,0,0.07) !important;
+        box-shadow: 0 4px 24px rgba(99,102,241,0.18), 0 1px 4px rgba(0,0,0,0.07) !important;
         padding-block: 0.35rem;
         transition: border-color 0.18s, box-shadow 0.18s;
     }
     div[data-testid="stChatInput"] > div:focus-within {
-        border-color: #86efac !important;
-        box-shadow: 0 0 0 3px rgba(34,197,94,0.13), 0 4px 20px rgba(22,163,74,0.12) !important;
+        border-color: #7dd3fc !important;
+        box-shadow: 0 0 0 3px rgba(59,130,246,0.18), 0 4px 20px rgba(99,102,241,0.18) !important;
     }
     div[data-testid="stChatInput"] textarea {
         color: #111827 !important;
@@ -720,9 +727,9 @@ css = """
         block-size: 2.6rem !important;
         min-inline-size: 44px !important;
         min-block-size: 44px !important;
-        background: linear-gradient(135deg, #16a34a, #15803d) !important;
+        background: linear-gradient(135deg, #8b5cf6, #2563eb, #0ea5e9) !important;
         border: none !important;
-        box-shadow: 0 2px 8px rgba(22,163,74,0.28) !important;
+        box-shadow: 0 2px 10px rgba(59,130,246,0.34) !important;
         transition: transform 0.12s, box-shadow 0.12s;
     }
     div[data-testid="stChatInput"] button:hover { transform: scale(1.06); }
@@ -730,14 +737,14 @@ css = """
     div[data-testid="stChatInput"] button::before { content: "➤"; color: #fff; font-size: 1rem; }
 
     [data-testid="stSidebar"] {
-        background: #f8fafc !important;
-        border-inline-end: 1px solid #e2e8f0 !important;
+        background: linear-gradient(180deg, #fdf4ff 0%, #eff6ff 45%, #ecfeff 100%) !important;
+        border-inline-end: 1px solid #dbeafe !important;
     }
     [data-testid="stSidebar"] .stMarkdown h3 {
         font-weight: 700;
         font-size: 1.05rem;
-        color: #14532d;
-        border-block-end: 2px solid #bbf7d0;
+        color: #4c1d95;
+        border-block-end: 2px solid #c4b5fd;
         padding-block-end: 0.35rem;
         margin-block-end: 0.6rem;
     }
@@ -752,9 +759,9 @@ css = """
     }
     [data-testid="stSidebar"] button[kind="secondary"] {
         border-radius: 10px !important;
-        border: 1px solid #dcfce7 !important;
-        background: #f0fdf4 !important;
-        color: #166534 !important;
+        border: 1px solid #c4b5fd !important;
+        background: linear-gradient(135deg, #f5f3ff, #e0f2fe) !important;
+        color: #3730a3 !important;
         font-size: 0.84rem !important;
         font-weight: 500 !important;
         text-align: start !important;
@@ -763,13 +770,13 @@ css = """
         min-block-size: 44px !important;
     }
     [data-testid="stSidebar"] button[kind="secondary"]:hover {
-        background: #dcfce7 !important;
-        border-color: #86efac !important;
+        background: linear-gradient(135deg, #ede9fe, #dbeafe) !important;
+        border-color: #818cf8 !important;
     }
     [data-testid="stSidebar"] button[kind="primary"],
     [data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:last-of-type {
         border-radius: 10px !important;
-        background: linear-gradient(135deg, #16a34a, #15803d) !important;
+        background: linear-gradient(135deg, #7c3aed, #2563eb, #0ea5e9) !important;
         color: #fff !important;
         border: none !important;
         font-weight: 600 !important;
@@ -777,8 +784,8 @@ css = """
     }
 
     .sidebar-mic {
-        background: #f0fdf4;
-        border: 1px solid #bbf7d0;
+        background: linear-gradient(135deg, #f5f3ff, #ecfeff);
+        border: 1px solid #c4b5fd;
         border-radius: 12px;
         padding: 0.65rem 0.75rem;
         display: flex;
@@ -793,8 +800,8 @@ css = """
         min-block-size: 44px !important;
         padding: 0 !important;
         border-radius: var(--radius-pill) !important;
-        border: 1px solid #86efac !important;
-        background: linear-gradient(135deg,#dcfce7,#bbf7d0) !important;
+        border: 1px solid #818cf8 !important;
+        background: linear-gradient(135deg,#ede9fe,#dbeafe) !important;
     }
     .sidebar-mic button svg { display: none !important; }
     .sidebar-mic button::before { content: "🎤"; font-size: 1.05rem; line-height: 1; }
@@ -802,38 +809,274 @@ css = """
     .stSpinner > div { border-block-start-color: var(--green-600) !important; }
 
     .page-card {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
+        background: linear-gradient(145deg, rgba(255,255,255,0.94), rgba(240,249,255,0.9));
+        border: 1px solid #cbd5e1;
         border-radius: 14px;
         padding: 1rem;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        box-shadow: 0 6px 18px rgba(59,130,246,0.12);
         margin-block-start: 0.35rem;
     }
 
-    [data-testid="stRadio"] [role="radiogroup"] {
-        gap: 0.28rem;
+    .home-shell {
+        position: relative;
+        display: grid;
+        gap: 0.85rem;
     }
-    [data-testid="stRadio"] [role="radiogroup"] label {
-        border-radius: 10px;
-        border: 1px solid #dcfce7;
-        background: #f0fdf4;
-        padding: 0.38rem 0.55rem;
-        min-block-size: 42px;
+
+    .home-hero {
+        position: relative;
+        overflow: hidden;
+        background: linear-gradient(130deg, #ede9fe 0%, #dbeafe 40%, #ccfbf1 100%);
+        border: 1px solid #a5b4fc;
+        border-radius: 20px;
+        padding: 1.25rem;
+        box-shadow: 0 12px 26px rgba(37, 99, 235, 0.18);
+        margin-block-end: 0.15rem;
     }
-    [data-testid="stRadio"] [role="radiogroup"] label:hover {
-        border-color: #86efac;
+
+    .home-hero::before,
+    .home-hero::after {
+        content: "";
+        position: absolute;
+        border-radius: 999px;
+        pointer-events: none;
     }
-    [data-testid="stRadio"] [role="radiogroup"] p {
-        font-size: 0.9rem !important;
-        color: #14532d !important;
-        font-weight: 500;
+
+    .home-hero::before {
+        inline-size: 190px;
+        block-size: 190px;
+        inset-block-start: -65px;
+        inset-inline-end: -45px;
+        background: radial-gradient(circle, rgba(59,130,246,0.25), rgba(59,130,246,0));
+    }
+
+    .home-hero::after {
+        inline-size: 170px;
+        block-size: 170px;
+        inset-block-end: -70px;
+        inset-inline-start: -40px;
+        background: radial-gradient(circle, rgba(20,184,166,0.24), rgba(20,184,166,0));
+    }
+
+    .hero-grid {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        grid-template-columns: 1.45fr 1fr;
+        gap: 0.9rem;
+        align-items: center;
+    }
+
+    .home-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        border-radius: 999px;
+        padding: 0.26rem 0.7rem;
+        background: linear-gradient(135deg, #f5f3ff, #e0f2fe);
+        border: 1px solid #c4b5fd;
+        color: #4338ca;
+        font-size: 0.78rem;
+        font-weight: 600;
+    }
+
+    .home-hero h1 {
+        margin: 0.65rem 0 0.45rem;
+        color: #1e1b4b;
+        font-size: clamp(1.4rem, 2.35vw, 2.2rem);
+        line-height: 1.2;
+    }
+
+    .home-sub {
+        margin: 0;
+        color: #334155;
+        font-size: 1rem;
+        line-height: 1.6;
+    }
+
+    .hero-right {
+        display: grid;
+        gap: 0.52rem;
+    }
+
+    .hero-mini-card {
+        border-radius: 12px;
+        border: 1px solid #bfdbfe;
+        background: rgba(255,255,255,0.7);
+        padding: 0.62rem 0.7rem;
+        box-shadow: 0 5px 15px rgba(59,130,246,0.12);
+    }
+
+    .hero-mini-card strong {
+        display: block;
+        color: #1e3a8a;
+        font-size: 0.86rem;
+        margin-block-end: 0.2rem;
+    }
+
+    .hero-mini-card span {
+        font-size: 0.8rem;
+        color: #334155;
+        line-height: 1.4;
+    }
+
+    .home-stat-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.5rem;
+    }
+
+    .home-stat {
+        border-radius: 12px;
+        border: 1px solid #bfdbfe;
+        background: linear-gradient(135deg, #ffffff, #f0f9ff);
+        text-align: center;
+        padding: 0.45rem 0.4rem;
+    }
+
+    .home-stat strong {
+        display: block;
+        color: #312e81;
+        font-size: 0.92rem;
+    }
+
+    .home-stat small {
+        color: #475569;
+        font-size: 0.72rem;
+    }
+
+    .home-section {
+        background: linear-gradient(145deg, rgba(255,255,255,0.96), rgba(240,249,255,0.92));
+        border: 1px solid #c7d2fe;
+        border-radius: 16px;
+        padding: 1.05rem;
+        margin-block: 0.75rem;
+        box-shadow: 0 8px 18px rgba(79, 70, 229, 0.11);
+    }
+
+    .home-section h3 {
+        margin: 0;
+        color: #312e81;
+        font-size: 1.08rem;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+
+    .home-section p,
+    .home-section li {
+        color: #1f2937;
+        line-height: 1.6;
+        margin-block: 0.45rem;
+    }
+
+    .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.7rem;
+        margin-block-start: 0.7rem;
+    }
+
+    .feature-card {
+        border-radius: 14px;
+        border: 1px solid #c4b5fd;
+        background: linear-gradient(140deg, #f8fafc, #eef2ff);
+        padding: 0.78rem;
+        transition: transform 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    .feature-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 18px rgba(59,130,246,0.14);
+    }
+
+    .feature-card strong {
+        color: #1e3a8a;
+        display: block;
+        margin-block-end: 0.25rem;
+    }
+
+    .cta-banner {
+        border-radius: 16px;
+        border: 1px solid #a5b4fc;
+        background: linear-gradient(120deg, #4f46e5, #0ea5e9, #14b8a6);
+        color: #ffffff;
+        padding: 1rem;
+        margin-block-start: 0.7rem;
+        box-shadow: 0 10px 24px rgba(37, 99, 235, 0.25);
+    }
+
+    .footer-tagline {
+        text-align: center;
+        font-weight: 700;
+        color: #4338ca;
+        margin: 1rem 0 0.2rem;
+        font-size: 0.97rem;
+    }
+
+    .footer-rotator {
+        margin: 0.9rem 0 0.25rem;
+        border-radius: 14px;
+        border: 1px solid #c4b5fd;
+        background: linear-gradient(120deg, #f5f3ff, #e0f2fe, #ecfeff);
+        overflow: hidden;
+        box-shadow: 0 8px 20px rgba(59,130,246,0.14);
+    }
+
+    .footer-track {
+        display: inline-flex;
+        gap: 0.7rem;
+        align-items: center;
+        padding: 0.62rem 0.7rem;
+        min-inline-size: max-content;
+        animation: footer-slide 24s linear infinite;
+    }
+
+    .footer-pill {
+        border-radius: 999px;
+        border: 1px solid #a5b4fc;
+        background: #ffffff;
+        color: #312e81;
+        font-size: 0.84rem;
+        font-weight: 600;
+        padding: 0.32rem 0.7rem;
+        white-space: nowrap;
+    }
+
+    @keyframes footer-slide {
+        from {
+            transform: translateX(0);
+        }
+        to {
+            transform: translateX(-50%);
+        }
+    }
+
+    .menu-current {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        border: 1px solid #c4b5fd;
+        background: linear-gradient(135deg, #ede9fe, #e0f2fe);
+        color: #312e81;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        padding: 0.25rem 0.6rem;
+        margin-block-end: 0.55rem;
+    }
+
+    .menu-hint {
+        font-size: 0.76rem;
+        color: #475569;
+        margin: 0.35rem 0 0.55rem;
     }
 
     [data-testid="stForm"] {
-        border: 1px solid #e5e7eb;
+        border: 1px solid #bfdbfe;
         border-radius: 12px;
         padding: 0.8rem;
-        background: #ffffff;
+        background: linear-gradient(140deg, #ffffff, #f8fafc);
     }
 
     div[data-testid="stTextInput"] input,
@@ -847,7 +1090,7 @@ css = """
         min-block-size: 44px !important;
     }
 
-    @media (max-width: 900px) {
+    @media (max-inline-size: 900px) {
         .main .block-container {
             padding-block-start: 4.8rem;
             padding-block-end: 7rem;
@@ -855,9 +1098,17 @@ css = """
         }
         .chat-topbar h2 { font-size: 1.05rem; }
         .chat-topbar p  { font-size: 0.78rem; }
+
+        .hero-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .feature-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
     }
 
-    @media (max-width: 600px) {
+    @media (max-inline-size: 600px) {
         :root {
             --chat-input-width: calc(100vw - 0.5rem);
             --composer-bottom: env(safe-area-inset-bottom, 0.5rem);
@@ -865,7 +1116,7 @@ css = """
         }
         .chat-topbar {
             inset-inline-start: 0 !important;
-            padding: 0.6rem 0.75rem 0.6rem 3.4rem;
+            padding: 0.6rem 3.4rem 0.6rem 0.75rem;
             gap: 0.5rem;
         }
         .chat-topbar .topbar-icon { font-size: 1.5rem; }
@@ -904,9 +1155,17 @@ css = """
             border-radius: 12px;
         }
 
-        [data-testid="stRadio"] [role="radiogroup"] label {
-            padding: 0.44rem 0.5rem;
-            min-block-size: 44px;
+        .feature-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .home-stat-row {
+            grid-template-columns: 1fr;
+        }
+
+        .footer-pill {
+            font-size: 0.78rem;
+            padding: 0.3rem 0.58rem;
         }
 
         [data-testid="stForm"] {
@@ -921,7 +1180,7 @@ css = """
         }
     }
 
-    @media (max-width: 380px) {
+    @media (max-inline-size: 380px) {
         .chat-topbar h2 { font-size: 0.82rem; }
         [data-testid="stChatMessage"] p { font-size: 0.88rem; }
         div[data-testid="stChatInput"] textarea { font-size: 0.92rem !important; }
@@ -940,14 +1199,37 @@ mic_audio = None
 
 with st.sidebar:
     st.markdown("### Farmer Assistant")
-    st.caption("Use the ☰ hamburger menu to open each module")
 
-    st.markdown("#### ☰ Menu")
-    selected_page = st.radio(
-        "Navigation",
-        ["Farmer Query", "Weather Prediction", "Price Prediction"],
-        label_visibility="collapsed",
+    if st.button("☰", key="hamburger_toggle", use_container_width=True, type="primary"):
+        st.session_state.menu_open = not st.session_state.menu_open
+        st.rerun()
+
+    st.markdown(
+        f"<p class='menu-current'>📍 Current: {st.session_state.selected_page}</p>",
+        unsafe_allow_html=True,
     )
+
+    page_options = [
+        ("Home", "🏠 Home"),
+        ("Farmer Query", "🌾 Farmer Query"),
+        ("Weather Prediction", "⛅ Weather Prediction"),
+        ("Price Prediction", "📈 Price Prediction"),
+    ]
+
+    if st.session_state.menu_open:
+        for page_value, label in page_options:
+            active = st.session_state.selected_page == page_value
+            if st.button(
+                label,
+                key=f"nav_{page_value}",
+                use_container_width=True,
+                type="primary" if active else "secondary",
+            ):
+                st.session_state.selected_page = page_value
+                st.session_state.menu_open = False
+                st.rerun()
+
+    selected_page = st.session_state.selected_page
 
     if selected_page == "Farmer Query":
         st.session_state.enable_tts = st.toggle(
@@ -979,7 +1261,139 @@ with st.sidebar:
             st.session_state.last_mic_hash = None
             st.rerun()
 
-if selected_page == "Farmer Query":
+if selected_page == "Home":
+    st.markdown(
+        """
+        <div class="chat-topbar">
+            <span class="topbar-icon">🏠</span>
+            <div class="topbar-text">
+                <h2>Farmer Advisory Home</h2>
+                <p>Smart farming guidance, beautifully organized in one place</p>
+            </div>
+            <span class="topbar-status">Online</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="home-shell">
+            <section class="home-hero">
+                <div class="hero-grid">
+                    <div>
+                        <span class="home-badge">🌾 Smart Agriculture Platform</span>
+                        <h1>👉 Empowering Farmers with Smart Decisions</h1>
+                        <p class="home-sub">Get real-time crop advice, weather updates, disease alerts, and market prices — all in one place, in your local language.</p>
+                    </div>
+                    <div class="hero-right">
+                        <div class="hero-mini-card">
+                            <strong>🌦️ Live Agri Signals</strong>
+                            <span>Weather alerts, crop support, and mandi trends in one colorful dashboard.</span>
+                        </div>
+                        <div class="hero-mini-card">
+                            <strong>🗣️ Local Language Ready</strong>
+                            <span>Easy guidance that farmers can understand and act on quickly.</span>
+                        </div>
+                        <div class="home-stat-row">
+                            <div class="home-stat"><strong>24/7</strong><small>AI Advisory</small></div>
+                            <div class="home-stat"><strong>Real-Time</strong><small>Weather Signals</small></div>
+                            <div class="home-stat"><strong>Smart</strong><small>Market Timing</small></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    cta1, cta2 = st.columns(2)
+    with cta1:
+        st.button("🚀 Get Started", use_container_width=True)
+    with cta2:
+        st.button("📊 View Crop Insights", use_container_width=True)
+
+    st.markdown(
+        """
+        <section class="home-section">
+            <h3>🌱 About Section</h3>
+            <p><strong>👉 What is Farmer Advisory System?</strong></p>
+            <p>Our Farmer Advisory System is an AI-powered platform designed to support farmers in making informed decisions. It provides personalized recommendations on crop selection, irrigation, pest control, and market trends based on real-time data and local conditions.</p>
+        </section>
+
+        <section class="home-section">
+            <h3>📊 Features Section</h3>
+            <p><strong>👉 Key Features</strong></p>
+            <div class="feature-grid">
+                <div class="feature-card"><strong>🌦️ Smart Weather Insights</strong><span>Get accurate weather forecasts and alerts to plan your farming activities efficiently.</span></div>
+                <div class="feature-card"><strong>🌿 Crop Recommendations</strong><span>Receive AI-based suggestions on the best crops to grow based on soil, season, and region.</span></div>
+                <div class="feature-card"><strong>🐛 Disease Detection</strong><span>Identify crop diseases early using image analysis and get instant treatment solutions.</span></div>
+                <div class="feature-card"><strong>💰 Market Price Forecasting</strong><span>Stay updated with mandi prices and future trends to sell your produce at the right time.</span></div>
+                <div class="feature-card"><strong>🗣️ Multilingual Support</strong><span>Access all features in your preferred local language for better understanding.</span></div>
+            </div>
+        </section>
+
+        <section class="home-section">
+            <h3>📈 How It Works</h3>
+            <p><strong>👉 How Our System Helps You</strong></p>
+            <ul>
+                <li>📍 Enter your location and crop details</li>
+                <li>🤖 AI analyzes weather, soil, and market data</li>
+                <li>📊 Get personalized recommendations</li>
+                <li>🌾 Improve yield and maximize profit</li>
+            </ul>
+        </section>
+
+        <section class="home-section">
+            <h3>🌍 Why Choose Us</h3>
+            <p><strong>👉 Why Farmers Trust Us</strong></p>
+            <ul>
+                <li>✔️ Data-driven insights</li>
+                <li>✔️ Easy-to-use interface</li>
+                <li>✔️ Works on mobile &amp; desktop</li>
+                <li>✔️ Supports rural connectivity</li>
+                <li>✔️ Trusted agricultural data sources</li>
+            </ul>
+        </section>
+
+        <section class="cta-banner">
+            <h3 style="margin:0;">📣 Call to Action Section</h3>
+            <p style="margin:0.55rem 0 0.4rem;"><strong>👉 Start Smarter Farming Today</strong></p>
+            <p style="margin:0; line-height:1.55;">Join thousands of farmers who are increasing their productivity and income using our smart advisory system.</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.button("👉 Join Now", use_container_width=True)
+
+    st.markdown(
+        """
+        <div class="footer-rotator">
+            <div class="footer-track">
+                <span class="footer-pill">🌱 “Growing Smarter, Harvesting Better”</span>
+                <span class="footer-pill">🚜 “From Soil to Success — Powered by Data”</span>
+                <span class="footer-pill">🌾 “Your Digital Farming Companion”</span>
+                <span class="footer-pill">📊 “Smart Farming Starts Here”</span>
+                <span class="footer-pill">🌍 “Empowering Farmers, Enriching Futures”</span>
+                <span class="footer-pill">🌿 “ खेती का स्मार्ट साथी (Smart Farming Partner)”</span>
+                <span class="footer-pill">💡 “Data-Driven Farming for a Better Tomorrow”</span>
+
+                <span class="footer-pill">🌱 “Growing Smarter, Harvesting Better”</span>
+                <span class="footer-pill">🚜 “From Soil to Success — Powered by Data”</span>
+                <span class="footer-pill">🌾 “Your Digital Farming Companion”</span>
+                <span class="footer-pill">📊 “Smart Farming Starts Here”</span>
+                <span class="footer-pill">🌍 “Empowering Farmers, Enriching Futures”</span>
+                <span class="footer-pill">🌿 “ खेती का स्मार्ट साथी (Smart Farming Partner)”</span>
+                <span class="footer-pill">💡 “Data-Driven Farming for a Better Tomorrow”</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+elif selected_page == "Farmer Query":
     st.markdown(
         """
         <div class="chat-topbar">
