@@ -55,11 +55,16 @@ def _normalize_audio_source(audio):
         return str(audio), False
 
     data = None
+    suffix = ".wav"
 
     if isinstance(audio, (bytes, bytearray)):
         data = bytes(audio)
     elif hasattr(audio, "getvalue"):
         data = audio.getvalue()
+        name = getattr(audio, "name", "")
+        ext = os.path.splitext(str(name))[1].lower()
+        if ext:
+            suffix = ext
     elif hasattr(audio, "read"):
         # Fallback for generic file-like objects
         current_pos = None
@@ -80,24 +85,32 @@ def _normalize_audio_source(audio):
                 except Exception:
                     pass
 
+        name = getattr(audio, "name", "")
+        ext = os.path.splitext(str(name))[1].lower()
+        if ext:
+            suffix = ext
+
     if not data:
         raise ValueError(
             "Unsupported audio input. Provide a file path, bytes, or an uploaded file."
         )
 
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(data)
         return tmp.name, True
 
 
-def transcribe(audio):
+def transcribe(audio, language: str | None = None):
     """Transcribe audio into text using OpenAI Whisper."""
     _ensure_ffmpeg_available()
     model = _get_model()
     audio_path, should_cleanup = _normalize_audio_source(audio)
 
     try:
-        result = model.transcribe(audio_path, fp16=False)
+        if language:
+            result = model.transcribe(audio_path, fp16=False, language=language)
+        else:
+            result = model.transcribe(audio_path, fp16=False)
         text = result.get("text", "") if isinstance(result, dict) else ""
         if not isinstance(text, str):
             text = str(text)

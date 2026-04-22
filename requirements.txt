@@ -8,6 +8,9 @@ faiss-cpu
 sentence-transformers
 openai
 pypdf
+pdfplumber
+pymupdf
+unstructured[pdf]
 openai-whisper
 streamlit
 fastapi

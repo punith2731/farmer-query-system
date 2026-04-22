@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+import base64
 from datetime import datetime, timedelta
 from typing import Optional
 from urllib.error import HTTPError
@@ -34,6 +35,47 @@ _MAX_WORDS = 300
 _GIBBERISH = re.compile(r"^[^a-zA-Z0-9\s]{3,}$|^(.)\1{4,}$")
 
 
+def _extract_main_keyword(text: str) -> str:
+    """Extract the most relevant farming keyword from the text."""
+    top_keywords = [
+        "crop", "plant", "seed", "soil", "fertilizer", "pesticide", "pest", "disease",
+        "irrigation", "water", "harvest", "yield", "paddy", "rice", "wheat", "maize",
+        "tomato", "onion", "potato", "cotton", "soybean", "groundnut",
+        "aphid", "blight", "mildew", "nitrogen", "phosphorus", "potassium",
+        "sowing", "planting", "pruning", "weed", "fungicide", "herbicide",
+        "armyworm", "locust", "pm-kisan", "subsidy", "scheme"
+    ]
+    text_lower = text.lower()
+    for keyword in top_keywords:
+        if re.search(r"\b" + keyword + r"\b", text_lower, re.IGNORECASE):
+            return keyword.capitalize()
+    # Fallback: extract first farming keyword found
+    match = _FARMING_KEYWORDS.search(text)
+    return match.group(0).capitalize() if match else "Farming Tips"
+
+
+def _expand_farmer_question(text: str, language: str = "English") -> str:
+    """Return a natural-language expansion of the user's question for display."""
+    cleaned = " ".join((text or "").strip().split())
+    if not cleaned:
+        return ""
+
+    cleaned = cleaned[0].upper() + cleaned[1:] if len(cleaned) > 1 else cleaned.upper()
+    if not cleaned.endswith(("?", ".", "!")):
+        cleaned += "?"
+
+    if language == "Kannada":
+        return (
+            "ನೀವು ಪ್ರಾಯೋಗಿಕ ಕೃಷಿ ಮಾರ್ಗದರ್ಶನವನ್ನು ಕೇಳುತ್ತಿದ್ದೀರಿ: "
+            f"{cleaned} ಇದನ್ನು ಸ್ಪಷ್ಟವಾಗಿ ಮತ್ತು ರೈತರಿಗೆ ಸುಲಭವಾಗಿ ಅರ್ಥವಾಗುವಂತೆ ನೋಡೋಣ."
+        )
+
+    return (
+        "You are asking for practical guidance about "
+        f"{cleaned.lower()} Let us break this down in a clear, farmer-friendly way."
+    )
+
+
 def _is_valid_query(text: str) -> tuple[bool, str]:
     """Return (is_valid, reason). Checks length, gibberish, and topic relevance."""
     text = text.strip()
@@ -51,13 +93,28 @@ def _is_valid_query(text: str) -> tuple[bool, str]:
     return True, "ok"
 
 
-_INVALID_RESPONSES = {
-    "empty": "⚠️ Please type a question before sending.",
-    "too short": "⚠️ Your query is too short. Please ask a complete farming-related question.",
-    "too long": "⚠️ Your message is too long. Please shorten your question.",
-    "gibberish": "❌ That doesn't look like a valid question. Please ask something about farming, crops, or agriculture.",
-    "off-topic": "❌ **Invalid query.** I can only answer questions related to farming, crops, pests, fertilizers, irrigation, or government agricultural schemes like PM-KISAN. Please rephrase your question.",
-}
+def _get_invalid_response(reason: str, language: str = "English") -> str:
+    """Get language-specific error message for invalid queries."""
+    invalid_responses = {
+        "English": {
+            "empty": "⚠️ Please type a question before sending.",
+            "too short": "⚠️ Your query is too short. Please ask a complete farming-related question.",
+            "too long": "⚠️ Your message is too long. Please shorten your question.",
+            "gibberish": "❌ That doesn't look like a valid question. Please ask something about farming, crops, or agriculture.",
+            "off-topic": "❌ **Invalid query.** I can only answer questions related to farming, crops, pests, fertilizers, irrigation, or government agricultural schemes like PM-KISAN. Please rephrase your question.",
+        },
+        "Kannada": {
+            "empty": "⚠️ ಕಳುಹಿಸುವ ಮೊದಲು ದಯವಿಟ್ಟು ಒಂದು ಪ್ರಶ್ನೆ ಟೈಪ್ ಮಾಡಿ.",
+            "too short": "⚠️ ನಿಮ್ಮ ಪ್ರಶ್ನೆ ತುಂಬಾ ಚಿಕ್ಕದಾಗಿದೆ. ದಯವಿಟ್ಟು ಸಂಪೂರ್ಣ ಕೃಷಿ-ಸಂಬಂಧಿತ ಪ್ರಶ್ನೆಯನ್ನು ಕೇಳಿ.",
+            "too long": "⚠️ ನಿಮ್ಮ ಸಂದೇಶ ತುಂಬಾ ಉದ್ದವಾಗಿದೆ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಸಂಕ್ಷಿಪ್ತಗೊಳಿಸಿ.",
+            "gibberish": "❌ ಇದು ಸಿಂಧುವಾಗಿ ತೋರುತ್ತಿಲ್ಲ. ದಯವಿಟ್ಟು ಕೃಷಿ, ಬೆಳೆಗಳು ಅಥವಾ ಕೃಷಿಯ ಬಗ್ಗೆ ಏನನ್ನಾದರೂ ಕೇಳಿ.",
+            "off-topic": "❌ **ಅಮಾನ್ಯ ಪ್ರಶ್ನೆ.** ನಾನು ಕೃಷಿ, ಬೆಳೆಗಳು, ಕೀಟಗಳು, ರಸಗೊಬ್ಬರ, ನೀರಾವರಣ ಅಥವಾ PM-KISAN ನಂತಹ ಸರ್ಕಾರಿ ಯೋಜನೆಗಳಿಗೆ ಸಂಬಂಧಿತ ಪ್ರಶ್ನೆಗಳಿಗೆ ಮಾತ್ರ ಉತ್ತರ ನೀಡಬಹುದು. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಸುಧಾರಿಸಿ.",
+        },
+    }
+    return invalid_responses.get(language, invalid_responses["English"]).get(
+        reason, invalid_responses["English"].get("off-topic", "Invalid query")
+    )
+
 
 
 def _fetch_json(url: str) -> dict:
@@ -464,15 +521,181 @@ def optimize_sell_windows(
 
 st.set_page_config(page_title="Farmer Advisory Assistant", page_icon="🌾", layout="wide", initial_sidebar_state="collapsed")
 
+# Kannada translations for UI elements - MUST be defined before use
+_TRANSLATIONS = {
+    "English": {
+        # Welcome & Core
+        "welcome": "👋 Welcome! Ask me about crops, pests, fertilizer schedules, irrigation, or government schemes like PM-KISAN.",
+        "farmer_assistant": "### Farmer Assistant",
+        "quick_prompts": "#### Quick prompts",
+        "voice_query": "#### Voice query",
+        "new_chat": "New chat",
+        
+        # Quick Questions
+        "q1": "How to control fall armyworm in maize?",
+        "q2": "Best fertilizer schedule for paddy",
+        "q3": "How often should I irrigate tomato in summer?",
+        "q4": "PM-KISAN eligibility and required documents",
+        
+        # Registration
+        "farmer_name": "Farmer Name",
+        "farmer_name_placeholder": "Enter your full name",
+        "place_village": "Place / Village",
+        "place_placeholder": "Enter your village, town, or city",
+        "mobile_no": "Mobile No.",
+        "mobile_placeholder": "10-digit mobile number",
+        "language_label": "Preferred Language",
+        "registration_incomplete": "Please fill in your name, place, and mobile number.",
+        "invalid_mobile": "Please enter a valid 10-digit mobile number.",
+        "registration_success": "Registration successful. Welcome, {name}!",
+        
+        # Query Validation
+        "empty_query": "⚠️ Please type a question before sending.",
+        "too_short": "⚠️ Your query is too short. Please ask a complete farming-related question.",
+        "too_long": "⚠️ Your message is too long. Please shorten your question.",
+        "gibberish": "❌ That doesn't look like a valid question. Please ask something about farming, crops, or agriculture.",
+        "off_topic": "❌ **Invalid query.** I can only answer questions related to farming, crops, pests, fertilizers, irrigation, or government agricultural schemes like PM-KISAN. Please rephrase your question.",
+        
+        # Chat Section
+        "ask_question": "Ask your farming question...",
+        "send_button": "Send",
+        "preparing_advisory": "Preparing advisory...",
+        "not_registered_chat": "Please register yourself on the Home page first to unlock Farmer Query.",
+        "speech_detection_failed": "Could not detect speech. Try again.",
+        "speech_error": "Voice transcription failed: {error}",
+        "voice_output_failed": "Could not generate voice output: {error}",
+        "chat_topbar_title": "AI Farmer Advisory Chat",
+        "chat_topbar_subtitle": "Ask about crops, pests, fertilizer, irrigation & govt. schemes",
+        "online_status": "Online",
+        
+        # Weather Section
+        "not_registered_weather": "Please register yourself on the Home page first to unlock Weather Prediction.",
+        "weather_title": "### Weather Prediction",
+        "village_city": "Village / City",
+        "village_placeholder": "e.g., Mysuru",
+        "forecast_window": "Forecast window",
+        "location_required": "Please enter a location.",
+        "forecast_loaded": "Forecast loaded for {location} ({days} days).",
+        "daily_forecast": "#### Daily forecast",
+        "farming_advisory": "#### Farming advisory",
+        "weather_error": "Weather prediction failed: {error}",
+        
+        # Price Section
+        "not_registered_price": "Please register yourself on the Home page first to unlock Price Prediction.",
+        "price_title": "### Price Prediction",
+        "crop_price_forecasting": "#### Crop price forecasting engine",
+        "alert_engine": "#### Alert engine",
+        "profit_optimizer": "#### Profit optimizer (0/7/14/21/30 days)",
+        "recommendation": "#### Recommendation",
+        
+        # Navigation
+        "home": "Home",
+        "chat": "Chat",
+        "weather": "Weather",
+        "price": "Price",
+        "profile": "Profile",
+        "settings": "Settings",
+        "read_aloud": "Read answers aloud",
+    },
+    "Kannada": {
+        # Welcome & Core
+        "welcome": "👋 ನಮ್ಮಗೆ ಸ್ವಾಗತ! ಬೆಳೆಗಳು, ಕೀಟಗಳು, ರಸಗೊಬ್ಬರ ಅವಧಿ, ನೀರಾವರಣ ಅಥವಾ PM-KISAN ನಂತಹ ಸರ್ಕಾರಿ ಯೋಜನೆಗಳ ಬಗ್ಗೆ ನನ್ನನ್ನು ಕೇಳಿ.",
+        "farmer_assistant": "### ರೈತ ಸಹಾಯಕ",
+        "quick_prompts": "#### ತ್ವರಿತ ಪ್ರಶ್ನೆಗಳು",
+        "voice_query": "#### ಧ್ವನಿ ಪ್ರಶ್ನೆ",
+        "new_chat": "ಹೊಸ ಚಾಟ್",
+        
+        # Quick Questions
+        "q1": "ಮೆಕ್ಕೆಯಲ್ಲಿ ಫಾಲ್ ಆರ್ಮಿವರ್ಮ್ ನಿಯಂತ್ರಣ ಹೇಗೆ?",
+        "q2": "ನೆಲೆ ಪದ್ಧತಿಯ ಸೋತಾ ರಸಗೊಬ್ಬರ ವೇಳಾಪಟ್ಟಿ",
+        "q3": "ಬೇಸಿಗೆಯಲ್ಲಿ ಟೊಮ್ಯಾಟೋ ಎಷ್ಟು ಬಾರಿ ನೀರಾವರಿಸಬೇಕು?",
+        "q4": "PM-KISAN ಯೋಗ್ಯತೆ ಮತ್ತು ಅಗತ್ಯ ದಾಖಲೆಗಳು",
+        
+        # Registration
+        "farmer_name": "ರೈತನ ಹೆಸರು",
+        "farmer_name_placeholder": "ನಿಮ್ಮ ಸಂಪೂರ್ಣ ಹೆಸರನ್ನು ನಮೂದಿಸಿ",
+        "place_village": "ಸ್ಥಳ / ಗ್ರಾಮ",
+        "place_placeholder": "ನಿಮ್ಮ ಗ್ರಾಮ, ಊರು ಅಥವಾ ನಗರವನ್ನು ನಮೂದಿಸಿ",
+        "mobile_no": "ಮೊಬೈಲ್ ಸಂಖ್ಯೆ",
+        "mobile_placeholder": "10 ಅಂಕಿಯ ಮೊಬೈಲ್ ಸಂಖ್ಯೆ",
+        "language_label": "ಆದ್ಯತೆಯ ಭಾಷೆ",
+        "registration_incomplete": "ದಯವಿಟ್ಟು ನಿಮ್ಮ ಹೆಸರು, ಸ್ಥಳ ಮತ್ತು ಮೊಬೈಲ್ ಸಂಖ್ಯೆ ಭರ್ತಿ ಮಾಡಿ.",
+        "invalid_mobile": "ದಯವಿಟ್ಟು ಸಿದ್ಧ 10 ಅಂಕಿಯ ಮೊಬೈಲ್ ಸಂಖ್ಯೆ ನಮೂದಿಸಿ.",
+        "registration_success": "ನೋಂದಣಿ ಯಶಸ್ವಿ. ಸ್ವಾಗತ, {name}!",
+        
+        # Query Validation
+        "empty_query": "⚠️ ಕಳುಹಿಸುವ ಮೊದಲು ದಯವಿಟ್ಟು ಒಂದು ಪ್ರಶ್ನೆ ಟೈಪ್ ಮಾಡಿ.",
+        "too_short": "⚠️ ನಿಮ್ಮ ಪ್ರಶ್ನೆ ತುಂಬಾ ಚಿಕ್ಕದಾಗಿದೆ. ದಯವಿಟ್ಟು ಸಂಪೂರ್ಣ ಕೃಷಿ-ಸಂಬಂಧಿತ ಪ್ರಶ್ನೆಯನ್ನು ಕೇಳಿ.",
+        "too_long": "⚠️ ನಿಮ್ಮ ಸಂದೇಶ ತುಂಬಾ ಉದ್ದವಾಗಿದೆ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಸಂಕ್ಷಿಪ್ತಗೊಳಿಸಿ.",
+        "gibberish": "❌ ಇದು ಸಿಂಧುವಾಗಿ ತೋರುತ್ತಿಲ್ಲ. ದಯವಿಟ್ಟು ಕೃಷಿ, ಬೆಳೆಗಳು ಅಥವಾ ಕೃಷಿಯ ಬಗ್ಗೆ ಏನನ್ನಾದರೂ ಕೇಳಿ.",
+        "off_topic": "❌ **ಅಮಾನ್ಯ ಪ್ರಶ್ನೆ.** ನಾನು ಕೃಷಿ, ಬೆಳೆಗಳು, ಕೀಟಗಳು, ರಸಗೊಬ್ಬರ, ನೀರಾವರಣ ಅಥವಾ PM-KISAN ನಂತಹ ಸರ್ಕಾರಿ ಯೋಜನೆಗಳಿಗೆ ಸಂಬಂಧಿತ ಪ್ರಶ್ನೆಗಳಿಗೆ ಮಾತ್ರ ಉತ್ತರ ನೀಡಬಹುದು. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಸುಧಾರಿಸಿ.",
+        
+        # Chat Section
+        "ask_question": "ನಿಮ್ಮ ಕೃಷಿ ಪ್ರಶ್ನೆಯನ್ನು ಕೇಳಿ...",
+        "send_button": "ಕಳುಹಿಸಿ",
+        "preparing_advisory": "ಸಲಹೆ ತಯಾರಿಸಿ...",
+        "not_registered_chat": "ಫಾರ್ಮರ್ ಕೇರಿ ಅನ್‌ಲಾಕ್ ಮಾಡಲು ದಯವಿಟ್ಟು ಹೋಮ್ ಪುಟದಲ್ಲಿ ನೋಂದಾಯನ ಮಾಡಿ.",
+        "speech_detection_failed": "ಧ್ವನಿ ಶೋಧಿತವಾಗಿಲ್ಲ. ಪುನಃ ಪ್ರಯತ್ನಿಸಿ.",
+        "speech_error": "ವಾಯ್ಸ್ ಟ್ರಾನ್ಸ್ಕ್ರಿಪ್ಷನ ವಿಫಲ: {error}",
+        "voice_output_failed": "ವಾಯ್ಸ್ ಔಟ್‌ಪುಟ್ ತಯಾರಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ: {error}",
+        "chat_topbar_title": "AI ರೈತರ ಸಲಹಾ ಚಾಟ್",
+        "chat_topbar_subtitle": "ಬೆಳೆ, ಕೀಟ, ರಸಗೊಬ್ಬರ, ನೀರಾವರಿ ಮತ್ತು ಸರ್ಕಾರದ ಯೋಜನೆಗಳ ಬಗ್ಗೆ ಕೇಳಿ",
+        "online_status": "ಆನ್‌ಲೈನ್",
+        
+        # Weather Section
+        "not_registered_weather": "ವಾತಾವರಣ ಮುನ್ನೆಚ್ಚರಣೆ ಅನ್‌ಲಾಕ್ ಮಾಡಲು ದಯವಿಟ್ಟು ಹೋಮ್ ಪುಟದಲ್ಲಿ ನೋಂದಾಯನ ಮಾಡಿ.",
+        "weather_title": "### ವಾತಾವರಣ ಮುನ್ನೆಚ್ಚರಣೆ",
+        "village_city": "ಗ್ರಾಮ / ನಗರ",
+        "village_placeholder": "ಉದಾ: ಮೈಸೂರು",
+        "forecast_window": "ಮುನ್ನೆಚ್ಚರಣೆ ಅವಧಿ",
+        "location_required": "ದಯವಿಟ್ಟು ಸ್ಥಳವನ್ನು ನಮೂದಿಸಿ.",
+        "forecast_loaded": "{location} ಗಾಗಿ ಮುನ್ನೆಚ್ಚರಣೆ ಲೋಡ್ ಆಗಿದೆ ({days} ದಿನಗಳು).",
+        "daily_forecast": "#### ದೈನಿಕ ಮುನ್ನೆಚ್ಚರಣೆ",
+        "farming_advisory": "#### ಕೃಷಿ ಸಲಹೆ",
+        "weather_error": "ವಾತಾವರಣ ಮುನ್ನೆಚ್ಚರಣೆ ವಿಫಲ: {error}",
+        
+        # Price Section
+        "not_registered_price": "ಬೆಲೆ ಮುನ್ನೆಚ್ಚರಣೆ ಅನ್‌ಲಾಕ್ ಮಾಡಲು ದಯವಿಟ್ಟು ಹೋಮ್ ಪುಟದಲ್ಲಿ ನೋಂದಾಯನ ಮಾಡಿ.",
+        "price_title": "### ಬೆಲೆ ಮುನ್ನೆಚ್ಚರಣೆ",
+        "crop_price_forecasting": "#### ಬೆಳೆಯ ಬೆಲೆ ಮುನ್ನೆಚ್ಚರಣೆ ಇಂಜಿನ್",
+        "alert_engine": "#### ಎಚ್ಚರಿಕೆ ಇಂಜಿನ್",
+        "profit_optimizer": "#### ಲಾಭ ಆಪ್ಟಿಮೈজರ್ (0/7/14/21/30 ದಿನಗಳು)",
+        "recommendation": "#### ಸಿಫಾರಿಶ",
+        
+        # Navigation
+        "home": "ನೆಲೆ",
+        "chat": "ಚಾಟ್",
+        "weather": "ವಾತಾವರಣ",
+        "price": "ಬೆಲೆ",
+        "profile": "ಪ್ರೊಫೈಲ್",
+        "settings": "ಸೆಟ್ಟಿಂಗ್‌ಗಳು",
+        "read_aloud": "ಉತ್ತರಗಳನ್ನು ಜೋರಾಗಿ ಓದಿ",
+    },
+}
+
+def _get_translation(key: str, lang: str = "English") -> str:
+    """Get translated text for a given key and language."""
+    return _TRANSLATIONS.get(lang, {}).get(key, _TRANSLATIONS["English"].get(key, key))
+    return _TRANSLATIONS.get(lang, {}).get(key, _TRANSLATIONS["English"].get(key, key))
+
+
+def _load_logo_data_uri() -> str:
+    """Return data URI for the project logo image, or empty string if missing."""
+    logo_path = os.path.join("pics", "Screenshot 2026-04-21 143316.png")
+    try:
+        with open(logo_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("utf-8")
+        return f"data:image/png;base64,{encoded}"
+    except Exception:
+        return ""
+
 
 def _seed_welcome_message():
+    lang = st.session_state.response_language if "response_language" in st.session_state else "English"
     return [
         {
             "role": "assistant",
-            "content": (
-                "👋 Welcome! Ask me about crops, pests, fertilizer schedules, irrigation, "
-                "or government schemes like PM-KISAN."
-            ),
+            "content": _get_translation("welcome", lang),
             "audio": None,
         }
     ]
@@ -487,6 +710,9 @@ if "last_mic_hash" not in st.session_state:
 if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
 
+if "pending_display_text" not in st.session_state:
+    st.session_state.pending_display_text = None
+
 if "enable_tts" not in st.session_state:
     st.session_state.enable_tts = False
 
@@ -498,24 +724,37 @@ if "selected_page" not in st.session_state:
 
 if "menu_open" not in st.session_state:
     st.session_state.menu_open = False
+if "farmer_registered" not in st.session_state:
+    st.session_state.farmer_registered = False
+
+if "farmer_profile" not in st.session_state:
+    st.session_state.farmer_profile = {
+        "name": "",
+        "place": "",
+        "mobile": "",
+        "language": "English",
+    }
+
+if "response_language" not in st.session_state:
+    st.session_state.response_language = "English"
 
 _THEMES = {
     "Light": {
-        "app_bg": "radial-gradient(circle at 8% 8%, #e0f2fe 0%, #f5f3ff 30%, #fef3c7 68%, #fde68a 100%)",
-        "topbar_bg": "linear-gradient(120deg, #6d28d9 0%, #2563eb 30%, #0ea5e9 55%, #14b8a6 78%, #22c55e 100%)",
-        "topbar_text": "#f8fafc",
-        "topbar_subtext": "#e0f2fe",
+        "app_bg": "#000000",
+        "topbar_bg": "#000000",
+        "topbar_text": "#ffffff",
+        "topbar_subtext": "#ffffff",
         "chat_bg": "#ffffff",
         "composer_bg": "#ffffff",
-        "composer_text": "#1e1b4b",
-        "composer_placeholder": "#64748b",
-        "composer_border": "#c4b5fd",
+        "composer_text": "#000000",
+        "composer_placeholder": "#666666",
+        "composer_border": "#ffffff",
     },
     "Dark": {
-        "app_bg": "#0b1220",
-        "topbar_bg": "linear-gradient(120deg, #312e81 0%, #1d4ed8 35%, #0e7490 65%, #166534 100%)",
-        "topbar_text": "#ecfeff",
-        "topbar_subtext": "#bae6fd",
+        "app_bg": "#000000",
+        "topbar_bg": "#000000",
+        "topbar_text": "#ffffff",
+        "topbar_subtext": "#ffffff",
         "chat_bg": "#121212",
         "composer_bg": "#1e1e1e",
         "composer_text": "#ffffff",
@@ -531,9 +770,9 @@ css = """
         --chat-input-width: min(1100px, calc(100vw - 1.2rem));
         --composer-bottom: 0.65rem;
         --mic-size: 2.2rem;
-        --green-600: #7c3aed;
-        --green-700: #2563eb;
-        --green-50: #f3e8ff;
+        --green-600: #ffffff;
+        --green-700: #ffffff;
+        --green-50: #ffffff;
         --radius-pill: 999px;
         --radius-card: 16px;
     }
@@ -559,8 +798,8 @@ css = """
         min-inline-size: 44px !important;
         min-block-size: 44px !important;
         border-radius: 8px !important;
-        background: linear-gradient(135deg, #7c3aed, #2563eb) !important;
-        border: 1px solid rgba(255,255,255,0.22) !important;
+        background: #000000 !important;
+        border: 1px solid #ffffff !important;
         color: #ffffff !important;
         display: inline-flex !important;
         align-items: center !important;
@@ -601,7 +840,7 @@ css = """
         background: __TOPBAR_BG__;
         padding: 0.82rem 1.5rem;
         color: __TOPBAR_TEXT__;
-        box-shadow: 0 6px 22px rgba(37, 99, 235, 0.34);
+        box-shadow: 0 6px 22px rgba(255, 255, 255, 0.34);
         display: flex;
         align-items: center;
         gap: 0.85rem;
@@ -620,6 +859,12 @@ css = """
 
     .chat-topbar .topbar-icon { font-size: 2rem; line-height: 1; flex-shrink: 0; }
     .chat-topbar .topbar-text { flex: 1; min-inline-size: 0; }
+    .chat-topbar .topbar-logo {
+        max-block-size: 68px;
+        inline-size: auto;
+        display: block;
+        object-fit: contain;
+    }
     .chat-topbar h2 {
         margin: 0;
         font-size: 1.18rem;
@@ -665,25 +910,25 @@ css = """
         padding: 0.5rem 0.6rem !important;
         border-radius: var(--radius-card) !important;
         margin-block-end: 0.55rem !important;
-        border: 1px solid transparent !important;
+        border: none !important;
         transition: background 0.15s;
     }
     [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
-        background: linear-gradient(135deg, #ede9fe, #dbeafe) !important;
-        border-color: #c4b5fd !important;
+        background: #ffffff !important;
+        border: 1px solid #ffffff !important;
     }
     [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
-        background: linear-gradient(135deg, #ecfeff, #f0fdf4) !important;
-        border-color: #93c5fd !important;
-        box-shadow: 0 3px 10px rgba(37,99,235,0.11);
+        background: #000000 !important;
+        border: none !important;
+        box-shadow: 0 3px 10px rgba(255,255,255,0.11);
     }
     [data-testid="stChatMessageAvatarUser"] {
-        background: linear-gradient(135deg, #8b5cf6, #2563eb) !important;
+        background: #ffffff !important;
         border-radius: 50% !important;
         color: #fff !important;
     }
     [data-testid="stChatMessageAvatarAssistant"] {
-        background: linear-gradient(135deg, #0ea5e9, #22c55e) !important;
+        background: #ffffff !important;
         border-radius: 50% !important;
         color: #fff !important;
     }
@@ -692,7 +937,7 @@ css = """
     div[data-testid="stBottomBlockContainer"] {
         padding-inline: 0.55rem;
         padding-block-end: var(--composer-bottom);
-        background: linear-gradient(to top, rgba(237, 233, 254, 0.86) 40%, rgba(224, 242, 254, 0.65) 70%, transparent 100%);
+        background: #000000;
     }
 
     div[data-testid="stChatInput"] {
@@ -703,18 +948,18 @@ css = """
     }
     div[data-testid="stChatInput"] > div {
         border-radius: 30px !important;
-        border: 1.5px solid #c4b5fd !important;
-        background: #ffffff !important;
-        box-shadow: 0 4px 24px rgba(99,102,241,0.18), 0 1px 4px rgba(0,0,0,0.07) !important;
+        border: 1.5px solid #ffffff !important;
+        background: #000000 !important;
+        box-shadow: 0 4px 24px rgba(255,255,255,0.18), 0 1px 4px rgba(0,0,0,0.07) !important;
         padding-block: 0.35rem;
         transition: border-color 0.18s, box-shadow 0.18s;
     }
     div[data-testid="stChatInput"] > div:focus-within {
-        border-color: #7dd3fc !important;
-        box-shadow: 0 0 0 3px rgba(59,130,246,0.18), 0 4px 20px rgba(99,102,241,0.18) !important;
+        border-color: #ffffff !important;
+        box-shadow: 0 0 0 3px rgba(255,255,255,0.18), 0 4px 20px rgba(255,255,255,0.18) !important;
     }
     div[data-testid="stChatInput"] textarea {
-        color: #111827 !important;
+        color: #ffffff !important;
         font-size: 1rem !important;
         padding-inline-start: 0.4rem !important;
         padding-block: 0.28rem !important;
@@ -727,9 +972,9 @@ css = """
         block-size: 2.6rem !important;
         min-inline-size: 44px !important;
         min-block-size: 44px !important;
-        background: linear-gradient(135deg, #8b5cf6, #2563eb, #0ea5e9) !important;
+        background: #ffffff !important;
         border: none !important;
-        box-shadow: 0 2px 10px rgba(59,130,246,0.34) !important;
+        box-shadow: 0 2px 10px rgba(255,255,255,0.34) !important;
         transition: transform 0.12s, box-shadow 0.12s;
     }
     div[data-testid="stChatInput"] button:hover { transform: scale(1.06); }
@@ -737,14 +982,14 @@ css = """
     div[data-testid="stChatInput"] button::before { content: "➤"; color: #fff; font-size: 1rem; }
 
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #fdf4ff 0%, #eff6ff 45%, #ecfeff 100%) !important;
-        border-inline-end: 1px solid #dbeafe !important;
+        background: #000000 !important;
+        border-inline-end: 1px solid #ffffff !important;
     }
     [data-testid="stSidebar"] .stMarkdown h3 {
         font-weight: 700;
         font-size: 1.05rem;
-        color: #4c1d95;
-        border-block-end: 2px solid #c4b5fd;
+        color: #ffffff;
+        border-block-end: 2px solid #ffffff;
         padding-block-end: 0.35rem;
         margin-block-end: 0.6rem;
     }
@@ -759,9 +1004,9 @@ css = """
     }
     [data-testid="stSidebar"] button[kind="secondary"] {
         border-radius: 10px !important;
-        border: 1px solid #c4b5fd !important;
-        background: linear-gradient(135deg, #f5f3ff, #e0f2fe) !important;
-        color: #3730a3 !important;
+        border: 1px solid #ffffff !important;
+        background: #000000 !important;
+        color: #ffffff !important;
         font-size: 0.84rem !important;
         font-weight: 500 !important;
         text-align: start !important;
@@ -770,13 +1015,13 @@ css = """
         min-block-size: 44px !important;
     }
     [data-testid="stSidebar"] button[kind="secondary"]:hover {
-        background: linear-gradient(135deg, #ede9fe, #dbeafe) !important;
-        border-color: #818cf8 !important;
+        background: #ffffff !important;
+        border-color: #ffffff !important;
     }
     [data-testid="stSidebar"] button[kind="primary"],
     [data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:last-of-type {
         border-radius: 10px !important;
-        background: linear-gradient(135deg, #7c3aed, #2563eb, #0ea5e9) !important;
+        background: #ffffff !important;
         color: #fff !important;
         border: none !important;
         font-weight: 600 !important;
@@ -784,8 +1029,8 @@ css = """
     }
 
     .sidebar-mic {
-        background: linear-gradient(135deg, #f5f3ff, #ecfeff);
-        border: 1px solid #c4b5fd;
+        background: #000000;
+        border: 1px solid #ffffff;
         border-radius: 12px;
         padding: 0.65rem 0.75rem;
         display: flex;
@@ -800,8 +1045,8 @@ css = """
         min-block-size: 44px !important;
         padding: 0 !important;
         border-radius: var(--radius-pill) !important;
-        border: 1px solid #818cf8 !important;
-        background: linear-gradient(135deg,#ede9fe,#dbeafe) !important;
+        border: 1px solid #ffffff !important;
+        background: #ffffff !important;
     }
     .sidebar-mic button svg { display: none !important; }
     .sidebar-mic button::before { content: "🎤"; font-size: 1.05rem; line-height: 1; }
@@ -809,11 +1054,11 @@ css = """
     .stSpinner > div { border-block-start-color: var(--green-600) !important; }
 
     .page-card {
-        background: linear-gradient(145deg, rgba(255,255,255,0.94), rgba(240,249,255,0.9));
-        border: 1px solid #cbd5e1;
+        background: #000000;
+        border: 1px solid #ffffff;
         border-radius: 14px;
         padding: 1rem;
-        box-shadow: 0 6px 18px rgba(59,130,246,0.12);
+        box-shadow: 0 6px 18px rgba(255,255,255,0.12);
         margin-block-start: 0.35rem;
     }
 
@@ -826,11 +1071,11 @@ css = """
     .home-hero {
         position: relative;
         overflow: hidden;
-        background: linear-gradient(130deg, #ede9fe 0%, #dbeafe 40%, #ccfbf1 100%);
-        border: 1px solid #a5b4fc;
+        background: #000000;
+        border: 1px solid #ffffff;
         border-radius: 20px;
         padding: 1.25rem;
-        box-shadow: 0 12px 26px rgba(37, 99, 235, 0.18);
+        box-shadow: 0 12px 26px rgba(255, 255, 255, 0.18);
         margin-block-end: 0.15rem;
     }
 
@@ -847,7 +1092,7 @@ css = """
         block-size: 190px;
         inset-block-start: -65px;
         inset-inline-end: -45px;
-        background: radial-gradient(circle, rgba(59,130,246,0.25), rgba(59,130,246,0));
+        background: radial-gradient(circle, rgba(255,255,255,0.25), rgba(255,255,255,0));
     }
 
     .home-hero::after {
@@ -855,7 +1100,7 @@ css = """
         block-size: 170px;
         inset-block-end: -70px;
         inset-inline-start: -40px;
-        background: radial-gradient(circle, rgba(20,184,166,0.24), rgba(20,184,166,0));
+        background: radial-gradient(circle, rgba(255,255,255,0.24), rgba(255,255,255,0));
     }
 
     .hero-grid {
@@ -873,23 +1118,23 @@ css = """
         gap: 0.35rem;
         border-radius: 999px;
         padding: 0.26rem 0.7rem;
-        background: linear-gradient(135deg, #f5f3ff, #e0f2fe);
-        border: 1px solid #c4b5fd;
-        color: #4338ca;
+        background: #000000;
+        border: 1px solid #ffffff;
+        color: #ffffff;
         font-size: 0.78rem;
         font-weight: 600;
     }
 
     .home-hero h1 {
         margin: 0.65rem 0 0.45rem;
-        color: #1e1b4b;
+        color: #ffffff;
         font-size: clamp(1.4rem, 2.35vw, 2.2rem);
         line-height: 1.2;
     }
 
     .home-sub {
         margin: 0;
-        color: #334155;
+        color: #ffffff;
         font-size: 1rem;
         line-height: 1.6;
     }
@@ -901,22 +1146,22 @@ css = """
 
     .hero-mini-card {
         border-radius: 12px;
-        border: 1px solid #bfdbfe;
-        background: rgba(255,255,255,0.7);
+        border: 1px solid #ffffff;
+        background: #000000;
         padding: 0.62rem 0.7rem;
-        box-shadow: 0 5px 15px rgba(59,130,246,0.12);
+        box-shadow: 0 5px 15px rgba(255,255,255,0.12);
     }
 
     .hero-mini-card strong {
         display: block;
-        color: #1e3a8a;
+        color: #ffffff;
         font-size: 0.86rem;
         margin-block-end: 0.2rem;
     }
 
     .hero-mini-card span {
         font-size: 0.8rem;
-        color: #334155;
+        color: #ffffff;
         line-height: 1.4;
     }
 
@@ -928,35 +1173,35 @@ css = """
 
     .home-stat {
         border-radius: 12px;
-        border: 1px solid #bfdbfe;
-        background: linear-gradient(135deg, #ffffff, #f0f9ff);
+        border: 1px solid #ffffff;
+        background: #000000;
         text-align: center;
         padding: 0.45rem 0.4rem;
     }
 
     .home-stat strong {
         display: block;
-        color: #312e81;
+        color: #ffffff;
         font-size: 0.92rem;
     }
 
     .home-stat small {
-        color: #475569;
+        color: #ffffff;
         font-size: 0.72rem;
     }
 
     .home-section {
-        background: linear-gradient(145deg, rgba(255,255,255,0.96), rgba(240,249,255,0.92));
-        border: 1px solid #c7d2fe;
+        background: #000000;
+        border: 1px solid #ffffff;
         border-radius: 16px;
         padding: 1.05rem;
         margin-block: 0.75rem;
-        box-shadow: 0 8px 18px rgba(79, 70, 229, 0.11);
+        box-shadow: 0 8px 18px rgba(255, 255, 255, 0.11);
     }
 
     .home-section h3 {
         margin: 0;
-        color: #312e81;
+        color: #ffffff;
         font-size: 1.08rem;
         display: flex;
         align-items: center;
@@ -965,7 +1210,7 @@ css = """
 
     .home-section p,
     .home-section li {
-        color: #1f2937;
+        color: #ffffff;
         line-height: 1.6;
         margin-block: 0.45rem;
     }
@@ -979,37 +1224,37 @@ css = """
 
     .feature-card {
         border-radius: 14px;
-        border: 1px solid #c4b5fd;
-        background: linear-gradient(140deg, #f8fafc, #eef2ff);
+        border: 1px solid #ffffff;
+        background: #000000;
         padding: 0.78rem;
         transition: transform 0.18s ease, box-shadow 0.18s ease;
     }
 
     .feature-card:hover {
         transform: translateY(-2px);
-        box-shadow: 0 8px 18px rgba(59,130,246,0.14);
+        box-shadow: 0 8px 18px rgba(255,255,255,0.14);
     }
 
     .feature-card strong {
-        color: #1e3a8a;
+        color: #ffffff;
         display: block;
         margin-block-end: 0.25rem;
     }
 
     .cta-banner {
         border-radius: 16px;
-        border: 1px solid #a5b4fc;
-        background: linear-gradient(120deg, #4f46e5, #0ea5e9, #14b8a6);
-        color: #ffffff;
+        border: 1px solid #ffffff;
+        background: #ffffff;
+        color: #000000;
         padding: 1rem;
         margin-block-start: 0.7rem;
-        box-shadow: 0 10px 24px rgba(37, 99, 235, 0.25);
+        box-shadow: 0 10px 24px rgba(255, 255, 255, 0.25);
     }
 
     .footer-tagline {
         text-align: center;
         font-weight: 700;
-        color: #4338ca;
+        color: #ffffff;
         margin: 1rem 0 0.2rem;
         font-size: 0.97rem;
     }
@@ -1017,10 +1262,10 @@ css = """
     .footer-rotator {
         margin: 0.9rem 0 0.25rem;
         border-radius: 14px;
-        border: 1px solid #c4b5fd;
-        background: linear-gradient(120deg, #f5f3ff, #e0f2fe, #ecfeff);
+        border: 1px solid #ffffff;
+        background: #000000;
         overflow: hidden;
-        box-shadow: 0 8px 20px rgba(59,130,246,0.14);
+        box-shadow: 0 8px 20px rgba(255,255,255,0.14);
     }
 
     .footer-track {
@@ -1034,9 +1279,9 @@ css = """
 
     .footer-pill {
         border-radius: 999px;
-        border: 1px solid #a5b4fc;
-        background: #ffffff;
-        color: #312e81;
+        border: 1px solid #ffffff;
+        background: #000000;
+        color: #ffffff;
         font-size: 0.84rem;
         font-weight: 600;
         padding: 0.32rem 0.7rem;
@@ -1056,9 +1301,9 @@ css = """
         display: inline-flex;
         align-items: center;
         gap: 0.4rem;
-        border: 1px solid #c4b5fd;
-        background: linear-gradient(135deg, #ede9fe, #e0f2fe);
-        color: #312e81;
+        border: 1px solid #ffffff;
+        background: #000000;
+        color: #ffffff;
         border-radius: 999px;
         font-size: 0.78rem;
         font-weight: 600;
@@ -1068,15 +1313,15 @@ css = """
 
     .menu-hint {
         font-size: 0.76rem;
-        color: #475569;
+        color: #ffffff;
         margin: 0.35rem 0 0.55rem;
     }
 
     [data-testid="stForm"] {
-        border: 1px solid #bfdbfe;
+        border: 1px solid #ffffff;
         border-radius: 12px;
         padding: 0.8rem;
-        background: linear-gradient(140deg, #ffffff, #f8fafc);
+        background: #000000;
     }
 
     div[data-testid="stTextInput"] input,
@@ -1120,6 +1365,7 @@ css = """
             gap: 0.5rem;
         }
         .chat-topbar .topbar-icon { font-size: 1.5rem; }
+        .chat-topbar .topbar-logo { max-block-size: 46px; }
         .chat-topbar h2 { font-size: 0.92rem; }
         .chat-topbar p  { display: none; }
         .topbar-status  { display: none; }
@@ -1195,25 +1441,292 @@ css = css.replace("__TOPBAR_SUBTEXT__", current_theme["topbar_subtext"])
 
 st.markdown(css, unsafe_allow_html=True)
 
+bw_css_override = """
+<style>
+    :root {
+        --green-600: #ffffff !important;
+        --green-700: #ffffff !important;
+        --green-50: #000000 !important;
+    }
+
+    html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"], .main {
+        background: #000000 !important;
+        color: #ffffff !important;
+    }
+
+    .chat-topbar,
+    .page-card,
+    .home-hero,
+    .home-section,
+    .feature-card,
+    .hero-mini-card,
+    .home-stat,
+    .cta-banner,
+    .footer-rotator,
+    .footer-pill,
+    .menu-current,
+    [data-testid="stSidebar"],
+    [data-testid="stSidebar"] button[kind="secondary"],
+    [data-testid="stSidebar"] button[kind="primary"],
+    .sidebar-mic,
+    .sidebar-mic button,
+    div[data-testid="stBottomBlockContainer"],
+    div[data-testid="stChatInput"] > div,
+    [data-testid="stChatMessage"],
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]),
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]),
+    [data-testid="stChatMessageAvatarUser"],
+    [data-testid="stChatMessageAvatarAssistant"],
+    [data-testid="stForm"],
+    [data-testid="stSidebarCollapsedControl"],
+    button[title="Open sidebar"],
+    button[title="Close sidebar"],
+    button[aria-label="Open sidebar"],
+    button[aria-label="Close sidebar"] {
+        background: #000000 !important;
+        background-image: none !important;
+        color: #ffffff !important;
+        border-color: #ffffff !important;
+        box-shadow: none !important;
+    }
+
+    [data-testid="stSidebarCollapsedControl"],
+    button[title="Open sidebar"],
+    button[title="Close sidebar"],
+    button[aria-label="Open sidebar"],
+    button[aria-label="Close sidebar"] {
+        background: #000000 !important;
+        color: #ffffff !important;
+        border-color: #ffffff !important;
+    }
+
+    [data-testid="stSidebarCollapsedControl"] svg,
+    button[title="Open sidebar"] svg,
+    button[title="Close sidebar"] svg,
+    button[aria-label="Open sidebar"] svg,
+    button[aria-label="Close sidebar"] svg {
+        color: #ffffff !important;
+        fill: #ffffff !important;
+        stroke: #ffffff !important;
+    }
+
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
+        border: none !important;
+    }
+
+    .chat-topbar p,
+    .topbar-status,
+    .home-sub,
+    .menu-hint,
+    .home-section p,
+    .home-section li,
+    .hero-mini-card span,
+    .home-stat small,
+    .footer-tagline,
+    [data-testid="stSidebar"] .stMarkdown h3,
+    [data-testid="stSidebar"] .stMarkdown h4,
+    [data-testid="stChatMessage"] p {
+        color: #ffffff !important;
+    }
+
+    div[data-testid="stChatInput"] textarea,
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stSelectbox"] [data-baseweb="select"] > div {
+        background: #000000 !important;
+        color: #ffffff !important;
+        border-color: #ffffff !important;
+    }
+
+    div[data-testid="stChatInput"] textarea::placeholder {
+        color: #ffffff !important;
+        opacity: 0.7 !important;
+    }
+
+    div[data-testid="stChatInput"] button,
+    div[data-testid="stFormSubmitButton"] button,
+    div[data-testid="stButton"] button {
+        background: #000000 !important;
+        color: #ffffff !important;
+        border: 1px solid #ffffff !important;
+        box-shadow: none !important;
+    }
+
+    /* Hamburger menu button styling */
+    div[data-testid="stButton"] button[kind="primary"] {
+        background: #000000 !important;
+        color: #ffffff !important;
+        border: 1px solid #ffffff !important;
+        font-size: 1.5rem !important;
+    }
+
+    div[data-testid="stChatInput"] button:hover,
+    div[data-testid="stFormSubmitButton"] button:hover,
+    div[data-testid="stButton"] button:hover,
+    [data-testid="stSidebar"] button[kind="secondary"]:hover {
+        background: #ffffff !important;
+        color: #000000 !important;
+        border-color: #ffffff !important;
+        transform: none !important;
+    }
+
+    .topbar-status::before,
+    .home-hero::before,
+    .home-hero::after {
+        display: none !important;
+        content: none !important;
+    }
+
+    *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+
+    .footer-track {
+        animation: footer-slide 24s linear infinite !important;
+    }
+
+    /* Override Streamlit alert elements (st.info, st.success, st.warning, st.error) */
+    [data-testid="stAlert"],
+    [data-testid="stCallout"],
+    .stAlert,
+    .stCallout,
+    .element-container [data-testid="stAlert"],
+    .element-container .stAlert {
+        background: #000000 !important;
+        border: 1px solid #ffffff !important;
+        color: #ffffff !important;
+    }
+
+    [data-testid="stAlert"] svg,
+    [data-testid="stCallout"] svg,
+    .stAlert svg,
+    .stCallout svg {
+        color: #ffffff !important;
+        fill: #ffffff !important;
+    }
+
+    [data-testid="stAlert"] > div,
+    [data-testid="stCallout"] > div,
+    .stAlert > div,
+    .stCallout > div {
+        color: #ffffff !important;
+    }
+
+    [data-testid="stAlert"] p,
+    [data-testid="stCallout"] p,
+    .stAlert p,
+    .stCallout p {
+        color: #ffffff !important;
+    }
+
+    /* Override Streamlit metric elements */
+    [data-testid="metric-container"],
+    .stMetric,
+    .element-container .stMetric {
+        background: #000000 !important;
+        border: 1px solid #ffffff !important;
+    }
+
+    [data-testid="metric-container"] > div,
+    .stMetric > div {
+        color: #ffffff !important;
+    }
+
+    /* Override Streamlit dataframe styling */
+    [data-testid="stDataFrame"],
+    .stDataframe,
+    .stDataFrame table {
+        background: #000000 !important;
+        color: #ffffff !important;
+    }
+
+    [data-testid="stDataFrame"] thead th,
+    .stDataframe table thead th,
+    .stDataFrame table thead th {
+        background: #ffffff !important;
+        color: #000000 !important;
+        border: 1px solid #ffffff !important;
+    }
+
+    [data-testid="stDataFrame"] tbody td,
+    .stDataframe table tbody td,
+    .stDataFrame table tbody td {
+        border: 1px solid #ffffff !important;
+        color: #ffffff !important;
+    }
+
+    /* Override caption and section headers */
+    [data-testid="stCaption"],
+    .stCaption,
+    .element-container .stCaption {
+        color: #ffffff !important;
+    }
+
+    /* Override heading colors */
+    [data-testid="stMarkdownContainer"] h1,
+    [data-testid="stMarkdownContainer"] h2,
+    [data-testid="stMarkdownContainer"] h3,
+    [data-testid="stMarkdownContainer"] h4,
+    [data-testid="stMarkdownContainer"] h5,
+    [data-testid="stMarkdownContainer"] h6 {
+        color: #ffffff !important;
+    }
+
+    /* Override all text in markdown containers */
+    [data-testid="stMarkdownContainer"] {
+        color: #ffffff !important;
+    }
+
+    [data-testid="stMarkdownContainer"] a {
+        color: #ffffff !important;
+    }
+
+    /* Override form labels */
+    [data-testid="stSelectbox"] label,
+    [data-testid="stTextInput"] label,
+    [data-testid="stForm"] label,
+    .stLabel {
+        color: #ffffff !important;
+    }
+
+    /* Override select box options */
+    [data-baseweb="select"] [role="option"] {
+        background: #000000 !important;
+        color: #ffffff !important;
+    }
+
+    /* Override expander styling */
+    [data-testid="stExpander"] button {
+        background: #000000 !important;
+        color: #ffffff !important;
+        border: 1px solid #ffffff !important;
+    }
+
+    [data-testid="stExpander"] svg {
+        color: #ffffff !important;
+    }
+</style>
+"""
+
+st.markdown(bw_css_override, unsafe_allow_html=True)
+
 mic_audio = None
 
 with st.sidebar:
-    st.markdown("### Farmer Assistant")
+    st.markdown(_get_translation("farmer_assistant", st.session_state.response_language))
+    menu_lang = st.session_state.response_language
 
     if st.button("☰", key="hamburger_toggle", use_container_width=True, type="primary"):
         st.session_state.menu_open = not st.session_state.menu_open
         st.rerun()
 
-    st.markdown(
-        f"<p class='menu-current'>📍 Current: {st.session_state.selected_page}</p>",
-        unsafe_allow_html=True,
-    )
-
     page_options = [
-        ("Home", "🏠 Home"),
-        ("Farmer Query", "🌾 Farmer Query"),
-        ("Weather Prediction", "⛅ Weather Prediction"),
-        ("Price Prediction", "📈 Price Prediction"),
+        ("Home", _get_translation("home", menu_lang)),
+        ("Farmer Query", f"🌾 {_get_translation('chat', menu_lang)}"),
+        ("Weather Prediction", f"⛅ {_get_translation('weather', menu_lang)}"),
+        ("Price Prediction", f"📈 {_get_translation('price', menu_lang)}"),
     ]
 
     if st.session_state.menu_open:
@@ -1233,72 +1746,188 @@ with st.sidebar:
 
     if selected_page == "Farmer Query":
         st.session_state.enable_tts = st.toggle(
-            "Read answers aloud",
+            _get_translation("read_aloud", st.session_state.response_language),
             value=st.session_state.enable_tts,
         )
 
-        st.markdown("#### Quick prompts")
+        st.markdown(_get_translation("quick_prompts", st.session_state.response_language))
         quick_questions = [
-            "How to control fall armyworm in maize?",
-            "Best fertilizer schedule for paddy",
-            "How often should I irrigate tomato in summer?",
-            "PM-KISAN eligibility and required documents",
+            (_get_translation("q1", st.session_state.response_language), "How to control fall armyworm in maize?"),
+            (_get_translation("q2", st.session_state.response_language), "Best fertilizer schedule for paddy"),
+            (_get_translation("q3", st.session_state.response_language), "How often should I irrigate tomato in summer?"),
+            (_get_translation("q4", st.session_state.response_language), "PM-KISAN eligibility and required documents"),
         ]
 
-        for idx, item in enumerate(quick_questions, start=1):
-            if st.button(item, key=f"quick_{idx}", use_container_width=True):
-                st.session_state.pending_prompt = item
+        for idx, (display_text, query_text) in enumerate(quick_questions, start=1):
+            if st.button(display_text, key=f"quick_{idx}", use_container_width=True):
+                st.session_state.pending_prompt = query_text
+                st.session_state.pending_display_text = display_text
                 st.rerun()
 
-        st.markdown("#### Voice query")
+        st.markdown(_get_translation("voice_query", st.session_state.response_language))
         st.markdown("<div class='sidebar-mic'>", unsafe_allow_html=True)
         mic_audio = st.audio_input(" ", key="mic_input")
         st.markdown("</div>", unsafe_allow_html=True)
 
-        if st.button("New chat", use_container_width=True):
+        if st.button(_get_translation("new_chat", st.session_state.response_language), use_container_width=True):
             st.session_state.messages = _seed_welcome_message()
             st.session_state.pending_prompt = None
             st.session_state.last_mic_hash = None
             st.rerun()
 
 if selected_page == "Home":
+    is_kn = st.session_state.response_language == "Kannada"
+    home_topbar_logo = _load_logo_data_uri()
+
+    if is_kn:
+        home_topbar_icon = "ಮುಖಪುಟ"
+        home_topbar_title = "ರೈತರ ಸಲಹಾ ಮುಖಪುಟ"
+        online_status = "ಆನ್‌ಲೈನ್"
+        home_badge = "ಸ್ಮಾರ್ಟ್ ಕೃಷಿ ವೇದಿಕೆ"
+        home_hero_title = "ಸ್ಮಾರ್ಟ್ ನಿರ್ಧಾರಗಳಿಂದ ರೈತರ ಸಬಲೀಕರಣ"
+        home_subtitle = "ಬೆಳೆ ಸಲಹೆ, ಹವಾಮಾನ ನವೀಕರಣ, ರೋಗ ಎಚ್ಚರಿಕೆ ಮತ್ತು ಮಾರುಕಟ್ಟೆ ಬೆಲೆಗಳನ್ನು ನಿಮ್ಮ ಸ್ಥಳೀಯ ಭಾಷೆಯಲ್ಲಿ ಒಂದೇ ಜಾಗದಲ್ಲಿ ಪಡೆಯಿರಿ."
+        signal_title = "ಲೈವ್ ಕೃಷಿ ಸೂಚನೆಗಳು"
+        signal_desc = "ಹವಾಮಾನ ಎಚ್ಚರಿಕೆ, ಬೆಳೆ ಬೆಂಬಲ ಮತ್ತು ಮಂಡಿ ಧೋರಣೆಗಳು ಒಂದೇ ಡ್ಯಾಶ್‌ಬೋರ್ಡ್‌ನಲ್ಲಿ."
+        local_lang_title = "ಸ್ಥಳೀಯ ಭಾಷೆ ಸಿದ್ಧ"
+        local_lang_desc = "ರೈತರಿಗೆ ಸುಲಭವಾಗಿ ಅರ್ಥವಾಗುವ ಮತ್ತು ತಕ್ಷಣ ಅನುಸರಿಸಬಹುದಾದ ಮಾರ್ಗದರ್ಶನ."
+        stat_1 = "AI ಸಲಹೆ"
+        stat_2 = "ಹವಾಮಾನ ಸೂಚನೆಗಳು"
+        stat_3 = "ಮಾರುಕಟ್ಟೆ ಸಮಯ"
+        register_label = "ರೈತರ ನೋಂದಣಿ"
+        registered_farmer_label = "ನೋಂದಾಯಿತ ರೈತ"
+        name_label = "ಹೆಸರು"
+        place_label = "ಸ್ಥಳ"
+        mobile_label = "ಮೊಬೈಲ್"
+        language_label = "ಭಾಷೆ"
+        registered_note = "ಈಗ ನೀವು ರೈತ ಪ್ರಶ್ನೆ, ಹವಾಮಾನ ಮುನ್ನೋಟ ಮತ್ತು ಬೆಲೆ ಮುನ್ನೋಟ ಆಯ್ಕೆಗಳನ್ನು ಬಳಸಬಹುದು."
+        about_section = "ಮಾಹಿತಿ ವಿಭಾಗ"
+        about_title = "ರೈತ ಸಲಹಾ ವ್ಯವಸ್ಥೆ ಎಂದರೇನು?"
+        about_desc = "ನಮ್ಮ ರೈತ ಸಲಹಾ ವ್ಯವಸ್ಥೆ ಕೃಷಿಕರಿಗೆ ತಿಳಿದ ನಿರ್ಧಾರಗಳನ್ನು ತೆಗೆದುಕೊಳ್ಳಲು ಸಹಾಯ ಮಾಡುವ AI ಆಧಾರಿತ ವೇದಿಕೆಯಾಗಿದೆ. ಇದು ಬೆಳೆ ಆಯ್ಕೆ, ನೀರಾವರಿ, ಕೀಟ ನಿಯಂತ್ರಣ ಮತ್ತು ಮಾರುಕಟ್ಟೆ ಧೋರಣೆಗಳ ಬಗ್ಗೆ ಸ್ಥಳೀಯ ಪರಿಸ್ಥಿತಿಗಳ ಆಧಾರದಲ್ಲಿ ವೈಯಕ್ತಿಕ ಸಲಹೆಗಳನ್ನು ನೀಡುತ್ತದೆ."
+        features_section = "ವೈಶಿಷ್ಟ್ಯಗಳ ವಿಭಾಗ"
+        key_features = "ಮುಖ್ಯ ವೈಶಿಷ್ಟ್ಯಗಳು"
+        feature_1_title = "ಸ್ಮಾರ್ಟ್ ಹವಾಮಾನ ಒಳನೋಟಗಳು"
+        feature_1_desc = "ನಿಖರ ಹವಾಮಾನ ಮುನ್ಸೂಚನೆ ಮತ್ತು ಎಚ್ಚರಿಕೆಗಳನ್ನು ಪಡೆದು ಕೃಷಿ ಕಾರ್ಯಗಳನ್ನು ಸಮರ್ಥವಾಗಿ ಯೋಜಿಸಿ."
+        feature_2_title = "ಬೆಳೆ ಶಿಫಾರಸುಗಳು"
+        feature_2_desc = "ಮಣ್ಣು, ಋತು ಮತ್ತು ಪ್ರದೇಶದ ಆಧಾರದ ಮೇಲೆ ಬೆಳೆಗಳಿಗೆ AI ಶಿಫಾರಸುಗಳನ್ನು ಪಡೆಯಿರಿ."
+        feature_3_title = "ರೋಗ ಪತ್ತೆ"
+        feature_3_desc = "ಚಿತ್ರ ವಿಶ್ಲೇಷಣೆಯಿಂದ ಬೆಳೆ ರೋಗಗಳನ್ನು ಬೇಗ ಗುರುತಿಸಿ ಮತ್ತು ತಕ್ಷಣದ ಪರಿಹಾರ ಪಡೆಯಿರಿ."
+        feature_4_title = "ಮಾರುಕಟ್ಟೆ ಬೆಲೆ ಮುನ್ನೋಟ"
+        feature_4_desc = "ಮಂಡಿ ಬೆಲೆಗಳು ಮತ್ತು ಭವಿಷ್ಯದ ಧೋರಣೆಗಳನ್ನು ತಿಳಿದು ಸರಿಯಾದ ಸಮಯದಲ್ಲಿ ಮಾರಾಟ ಮಾಡಿ."
+        feature_5_title = "ಬಹುಭಾಷಾ ಬೆಂಬಲ"
+        feature_5_desc = "ಉತ್ತಮ ಅರಿವಿಗಾಗಿ ನಿಮ್ಮ ಇಷ್ಟದ ಸ್ಥಳೀಯ ಭಾಷೆಯಲ್ಲಿ ಎಲ್ಲಾ ವೈಶಿಷ್ಟ್ಯಗಳನ್ನು ಬಳಸಿ."
+        how_it_works = "ಇದು ಹೇಗೆ ಕೆಲಸ ಮಾಡುತ್ತದೆ"
+        how_it_works_title = "ನಮ್ಮ ವ್ಯವಸ್ಥೆ ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡುತ್ತದೆ"
+        step_1 = "ನಿಮ್ಮ ಸ್ಥಳ ಮತ್ತು ಬೆಳೆ ವಿವರಗಳನ್ನು ನಮೂದಿಸಿ"
+        step_2 = "AI ಹವಾಮಾನ, ಮಣ್ಣು ಮತ್ತು ಮಾರುಕಟ್ಟೆ ಡೇಟಾವನ್ನು ವಿಶ್ಲೇಷಿಸುತ್ತದೆ"
+        step_3 = "ವೈಯಕ್ತಿಕ ಶಿಫಾರಸುಗಳನ್ನು ಪಡೆಯಿರಿ"
+        step_4 = "ಉತ್ಪಾದನೆ ಹೆಚ್ಚಿಸಿ ಮತ್ತು ಲಾಭ ಗರಿಷ್ಠಗೊಳಿಸಿ"
+        why_choose = "ನಮ್ಮನ್ನು ಏಕೆ ಆಯ್ಕೆ ಮಾಡಬೇಕು"
+        why_trust = "ರೈತರು ನಮ್ಮ ಮೇಲೆ ಏಕೆ ನಂಬಿಕೆ ಇಡುತ್ತಾರೆ"
+        why_1 = "ಡೇಟಾ ಆಧಾರಿತ ಒಳನೋಟಗಳು"
+        why_2 = "ಬಳಕೆ ಮಾಡಲು ಸುಲಭವಾದ ಇಂಟರ್ಫೇಸ್"
+        why_3 = "ಮೊಬೈಲ್ ಮತ್ತು ಡೆಸ್ಕ್‌ಟಾಪ್‌ನಲ್ಲಿ ಕಾರ್ಯನಿರ್ವಹಿಸುತ್ತದೆ"
+        why_4 = "ಗ್ರಾಮೀಣ ಸಂಪರ್ಕಕ್ಕೂ ಬೆಂಬಲ"
+        why_5 = "ವಿಶ್ವಾಸಾರ್ಹ ಕೃಷಿ ಡೇಟಾ ಮೂಲಗಳು"
+        footer_1 = "ಚತುರವಾಗಿ ಬೆಳೆಸಿ, ಉತ್ತಮವಾಗಿ ಕೊಯ್ಯಿರಿ"
+        footer_2 = "ಮಣ್ಣಿನಿಂದ ಯಶಸ್ಸಿನವರೆಗೆ — ಡೇಟಾದ ಶಕ್ತಿ"
+        footer_3 = "ನಿಮ್ಮ ಡಿಜಿಟಲ್ ಕೃಷಿ ಸಂಗಾತಿ"
+        footer_4 = "ಸ್ಮಾರ್ಟ್ ಕೃಷಿ ಇಲ್ಲಿ ಆರಂಭವಾಗುತ್ತದೆ"
+        footer_5 = "ರೈತರ ಸಬಲೀಕರಣ, ಸಮೃದ್ಧ ಭವಿಷ್ಯ"
+        footer_6 = "खेती का स्मार्ट साथी (ಸ್ಮಾರ್ಟ್ ಕೃಷಿ ಸಂಗಾತಿ)"
+        footer_7 = "ಉತ್ತಮ ನಾಳೆಗಾಗಿ ಡೇಟಾ ಆಧಾರಿತ ಕೃಷಿ"
+    else:
+        home_topbar_icon = "Home"
+        home_topbar_title = "Farmer Advisory Home"
+        online_status = "Online"
+        home_badge = "Smart Agriculture Platform"
+        home_hero_title = "Empowering Farmers with Smart Decisions"
+        home_subtitle = "Get real-time crop advice, weather updates, disease alerts, and market prices — all in one place, in your local language."
+        signal_title = "Live Agri Signals"
+        signal_desc = "Weather alerts, crop support, and mandi trends in one colorful dashboard."
+        local_lang_title = "Local Language Ready"
+        local_lang_desc = "Easy guidance that farmers can understand and act on quickly."
+        stat_1 = "AI Advisory"
+        stat_2 = "Weather Signals"
+        stat_3 = "Market Timing"
+        register_label = "Register Farmer"
+        registered_farmer_label = "Registered Farmer"
+        name_label = "Name"
+        place_label = "Place"
+        mobile_label = "Mobile"
+        language_label = "Language"
+        registered_note = "You can now use the Farmer Query, Weather Prediction, and Price Prediction options."
+        about_section = "About Section"
+        about_title = "What is Farmer Advisory System?"
+        about_desc = "Our Farmer Advisory System is an AI-powered platform designed to support farmers in making informed decisions. It provides personalized recommendations on crop selection, irrigation, pest control, and market trends based on real-time data and local conditions."
+        features_section = "Features Section"
+        key_features = "Key Features"
+        feature_1_title = "Smart Weather Insights"
+        feature_1_desc = "Get accurate weather forecasts and alerts to plan your farming activities efficiently."
+        feature_2_title = "Crop Recommendations"
+        feature_2_desc = "Receive AI-based suggestions on the best crops to grow based on soil, season, and region."
+        feature_3_title = "Disease Detection"
+        feature_3_desc = "Identify crop diseases early using image analysis and get instant treatment solutions."
+        feature_4_title = "Market Price Forecasting"
+        feature_4_desc = "Stay updated with mandi prices and future trends to sell your produce at the right time."
+        feature_5_title = "Multilingual Support"
+        feature_5_desc = "Access all features in your preferred local language for better understanding."
+        how_it_works = "How It Works"
+        how_it_works_title = "How Our System Helps You"
+        step_1 = "Enter your location and crop details"
+        step_2 = "AI analyzes weather, soil, and market data"
+        step_3 = "Get personalized recommendations"
+        step_4 = "Improve yield and maximize profit"
+        why_choose = "Why Choose Us"
+        why_trust = "Why Farmers Trust Us"
+        why_1 = "Data-driven insights"
+        why_2 = "Easy-to-use interface"
+        why_3 = "Works on mobile & desktop"
+        why_4 = "Supports rural connectivity"
+        why_5 = "Trusted agricultural data sources"
+        footer_1 = "Growing Smarter, Harvesting Better"
+        footer_2 = "From Soil to Success — Powered by Data"
+        footer_3 = "Your Digital Farming Companion"
+        footer_4 = "Smart Farming Starts Here"
+        footer_5 = "Empowering Farmers, Enriching Futures"
+        footer_6 = "खेती का स्मार्ट साथी (Smart Farming Partner)"
+        footer_7 = "Data-Driven Farming for a Better Tomorrow"
+
     st.markdown(
-        """
+        f"""
         <div class="chat-topbar">
-            <span class="topbar-icon">🏠</span>
+            <span class="topbar-icon">{home_topbar_icon}</span>
             <div class="topbar-text">
-                <h2>Farmer Advisory Home</h2>
-                <p>Smart farming guidance, beautifully organized in one place</p>
+                {f'<img src="{home_topbar_logo}" alt="Farmer Advisory System" class="topbar-logo" />' if home_topbar_logo else f'<h2>{home_topbar_title}</h2>'}
             </div>
-            <span class="topbar-status">Online</span>
+            <span class="topbar-status">{online_status}</span>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
     st.markdown(
-        """
+        f"""
         <div class="home-shell">
             <section class="home-hero">
                 <div class="hero-grid">
                     <div>
-                        <span class="home-badge">🌾 Smart Agriculture Platform</span>
-                        <h1>👉 Empowering Farmers with Smart Decisions</h1>
-                        <p class="home-sub">Get real-time crop advice, weather updates, disease alerts, and market prices — all in one place, in your local language.</p>
+                        <span class="home-badge">{home_badge}</span>
+                        <h1>{home_hero_title}</h1>
+                        <p class="home-sub">{home_subtitle}</p>
                     </div>
                     <div class="hero-right">
                         <div class="hero-mini-card">
-                            <strong>🌦️ Live Agri Signals</strong>
-                            <span>Weather alerts, crop support, and mandi trends in one colorful dashboard.</span>
+                            <strong>{signal_title}</strong>
+                            <span>{signal_desc}</span>
                         </div>
                         <div class="hero-mini-card">
-                            <strong>🗣️ Local Language Ready</strong>
-                            <span>Easy guidance that farmers can understand and act on quickly.</span>
+                            <strong>{local_lang_title}</strong>
+                            <span>{local_lang_desc}</span>
                         </div>
                         <div class="home-stat-row">
-                            <div class="home-stat"><strong>24/7</strong><small>AI Advisory</small></div>
-                            <div class="home-stat"><strong>Real-Time</strong><small>Weather Signals</small></div>
-                            <div class="home-stat"><strong>Smart</strong><small>Market Timing</small></div>
+                            <div class="home-stat"><strong>24/7</strong><small>{stat_1}</small></div>
+                            <div class="home-stat"><strong>Real-Time</strong><small>{stat_2}</small></div>
+                            <div class="home-stat"><strong>Smart</strong><small>{stat_3}</small></div>
                         </div>
                     </div>
                 </div>
@@ -1308,85 +1937,117 @@ if selected_page == "Home":
         unsafe_allow_html=True,
     )
 
-    cta1, cta2 = st.columns(2)
-    with cta1:
-        st.button("🚀 Get Started", use_container_width=True)
-    with cta2:
-        st.button("📊 View Crop Insights", use_container_width=True)
+    if not st.session_state.farmer_registered:
+        with st.form("farmer_registration_form"):
+            reg_name = st.text_input(_get_translation("farmer_name", st.session_state.response_language), placeholder=_get_translation("farmer_name_placeholder", st.session_state.response_language))
+            reg_place = st.text_input(_get_translation("place_village", st.session_state.response_language), placeholder=_get_translation("place_placeholder", st.session_state.response_language))
+            reg_mobile = st.text_input(_get_translation("mobile_no", st.session_state.response_language), placeholder=_get_translation("mobile_placeholder", st.session_state.response_language))
+            reg_language = st.radio(
+                _get_translation("language_label", st.session_state.response_language),
+                ["English", "Kannada"],
+                horizontal=True,
+                index=0,
+            )
+            reg_submit = st.form_submit_button(register_label, use_container_width=True)
+
+        if reg_submit:
+            if not reg_name.strip() or not reg_place.strip() or not reg_mobile.strip():
+                st.error(_get_translation("registration_incomplete", st.session_state.response_language))
+            elif not re.fullmatch(r"\d{10}", reg_mobile.strip()):
+                st.error(_get_translation("invalid_mobile", st.session_state.response_language))
+            else:
+                st.session_state.farmer_registered = True
+                st.session_state.farmer_profile = {
+                    "name": reg_name.strip(),
+                    "place": reg_place.strip(),
+                    "mobile": reg_mobile.strip(),
+                    "language": reg_language,
+                }
+                st.session_state.response_language = reg_language
+                st.success(_get_translation("registration_success", st.session_state.response_language).format(name=reg_name.strip()))
+                st.rerun()
+    else:
+        profile = st.session_state.farmer_profile
+        st.markdown(
+            f"""
+            <section class="home-section">
+                <h3>{registered_farmer_label}</h3>
+                <p><strong>{name_label}:</strong> {profile['name']}</p>
+                <p><strong>{place_label}:</strong> {profile['place']}</p>
+                <p><strong>{mobile_label}:</strong> {profile['mobile']}</p>
+                <p><strong>{language_label}:</strong> {profile['language']}</p>
+                <p>{registered_note}</p>
+            </section>
+            """,
+            unsafe_allow_html=True,
+        )
 
     st.markdown(
-        """
+        f"""
         <section class="home-section">
-            <h3>🌱 About Section</h3>
-            <p><strong>👉 What is Farmer Advisory System?</strong></p>
-            <p>Our Farmer Advisory System is an AI-powered platform designed to support farmers in making informed decisions. It provides personalized recommendations on crop selection, irrigation, pest control, and market trends based on real-time data and local conditions.</p>
+            <h3>{about_section}</h3>
+            <p><strong>{about_title}</strong></p>
+            <p>{about_desc}</p>
         </section>
 
         <section class="home-section">
-            <h3>📊 Features Section</h3>
-            <p><strong>👉 Key Features</strong></p>
+            <h3>{features_section}</h3>
+            <p><strong>{key_features}</strong></p>
             <div class="feature-grid">
-                <div class="feature-card"><strong>🌦️ Smart Weather Insights</strong><span>Get accurate weather forecasts and alerts to plan your farming activities efficiently.</span></div>
-                <div class="feature-card"><strong>🌿 Crop Recommendations</strong><span>Receive AI-based suggestions on the best crops to grow based on soil, season, and region.</span></div>
-                <div class="feature-card"><strong>🐛 Disease Detection</strong><span>Identify crop diseases early using image analysis and get instant treatment solutions.</span></div>
-                <div class="feature-card"><strong>💰 Market Price Forecasting</strong><span>Stay updated with mandi prices and future trends to sell your produce at the right time.</span></div>
-                <div class="feature-card"><strong>🗣️ Multilingual Support</strong><span>Access all features in your preferred local language for better understanding.</span></div>
+                <div class="feature-card"><strong>{feature_1_title}</strong><span>{feature_1_desc}</span></div>
+                <div class="feature-card"><strong>{feature_2_title}</strong><span>{feature_2_desc}</span></div>
+                <div class="feature-card"><strong>{feature_3_title}</strong><span>{feature_3_desc}</span></div>
+                <div class="feature-card"><strong>{feature_4_title}</strong><span>{feature_4_desc}</span></div>
+                <div class="feature-card"><strong>{feature_5_title}</strong><span>{feature_5_desc}</span></div>
             </div>
         </section>
 
         <section class="home-section">
-            <h3>📈 How It Works</h3>
-            <p><strong>👉 How Our System Helps You</strong></p>
+            <h3>{how_it_works}</h3>
+            <p><strong>{how_it_works_title}</strong></p>
             <ul>
-                <li>📍 Enter your location and crop details</li>
-                <li>🤖 AI analyzes weather, soil, and market data</li>
-                <li>📊 Get personalized recommendations</li>
-                <li>🌾 Improve yield and maximize profit</li>
+                <li>{step_1}</li>
+                <li>{step_2}</li>
+                <li>{step_3}</li>
+                <li>{step_4}</li>
             </ul>
         </section>
 
         <section class="home-section">
-            <h3>🌍 Why Choose Us</h3>
-            <p><strong>👉 Why Farmers Trust Us</strong></p>
+            <h3>{why_choose}</h3>
+            <p><strong>{why_trust}</strong></p>
             <ul>
-                <li>✔️ Data-driven insights</li>
-                <li>✔️ Easy-to-use interface</li>
-                <li>✔️ Works on mobile &amp; desktop</li>
-                <li>✔️ Supports rural connectivity</li>
-                <li>✔️ Trusted agricultural data sources</li>
+                <li>{why_1}</li>
+                <li>{why_2}</li>
+                <li>{why_3}</li>
+                <li>{why_4}</li>
+                <li>{why_5}</li>
             </ul>
         </section>
 
-        <section class="cta-banner">
-            <h3 style="margin:0;">📣 Call to Action Section</h3>
-            <p style="margin:0.55rem 0 0.4rem;"><strong>👉 Start Smarter Farming Today</strong></p>
-            <p style="margin:0; line-height:1.55;">Join thousands of farmers who are increasing their productivity and income using our smart advisory system.</p>
-        </section>
         """,
         unsafe_allow_html=True,
     )
 
-    st.button("👉 Join Now", use_container_width=True)
-
     st.markdown(
-        """
+        f"""
         <div class="footer-rotator">
             <div class="footer-track">
-                <span class="footer-pill">🌱 “Growing Smarter, Harvesting Better”</span>
-                <span class="footer-pill">🚜 “From Soil to Success — Powered by Data”</span>
-                <span class="footer-pill">🌾 “Your Digital Farming Companion”</span>
-                <span class="footer-pill">📊 “Smart Farming Starts Here”</span>
-                <span class="footer-pill">🌍 “Empowering Farmers, Enriching Futures”</span>
-                <span class="footer-pill">🌿 “ खेती का स्मार्ट साथी (Smart Farming Partner)”</span>
-                <span class="footer-pill">💡 “Data-Driven Farming for a Better Tomorrow”</span>
+                <span class="footer-pill">“{footer_1}”</span>
+                <span class="footer-pill">“{footer_2}”</span>
+                <span class="footer-pill">“{footer_3}”</span>
+                <span class="footer-pill">“{footer_4}”</span>
+                <span class="footer-pill">“{footer_5}”</span>
+                <span class="footer-pill">“{footer_6}”</span>
+                <span class="footer-pill">“{footer_7}”</span>
 
-                <span class="footer-pill">🌱 “Growing Smarter, Harvesting Better”</span>
-                <span class="footer-pill">🚜 “From Soil to Success — Powered by Data”</span>
-                <span class="footer-pill">🌾 “Your Digital Farming Companion”</span>
-                <span class="footer-pill">📊 “Smart Farming Starts Here”</span>
-                <span class="footer-pill">🌍 “Empowering Farmers, Enriching Futures”</span>
-                <span class="footer-pill">🌿 “ खेती का स्मार्ट साथी (Smart Farming Partner)”</span>
-                <span class="footer-pill">💡 “Data-Driven Farming for a Better Tomorrow”</span>
+                <span class="footer-pill">“{footer_1}”</span>
+                <span class="footer-pill">“{footer_2}”</span>
+                <span class="footer-pill">“{footer_3}”</span>
+                <span class="footer-pill">“{footer_4}”</span>
+                <span class="footer-pill">“{footer_5}”</span>
+                <span class="footer-pill">“{footer_6}”</span>
+                <span class="footer-pill">“{footer_7}”</span>
             </div>
         </div>
         """,
@@ -1394,15 +2055,28 @@ if selected_page == "Home":
     )
 
 elif selected_page == "Farmer Query":
+    if not st.session_state.farmer_registered:
+        st.warning(_get_translation("not_registered_chat", st.session_state.response_language))
+        st.stop()
+
+    # Keep initial welcome message aligned with currently selected language.
+    if st.session_state.messages:
+        first = st.session_state.messages[0]
+        if first.get("role") == "assistant" and first.get("content") in {
+            _TRANSLATIONS["English"]["welcome"],
+            _TRANSLATIONS["Kannada"]["welcome"],
+        }:
+            first["content"] = _get_translation("welcome", st.session_state.response_language)
+
     st.markdown(
-        """
+        f"""
         <div class="chat-topbar">
             <span class="topbar-icon">🌾</span>
             <div class="topbar-text">
-                <h2>AI Farmer Advisory Chat</h2>
-                <p>Ask about crops, pests, fertilizer, irrigation &amp; govt. schemes</p>
+                <h2>{_get_translation("chat_topbar_title", st.session_state.response_language)}</h2>
+                <p>{_get_translation("chat_topbar_subtitle", st.session_state.response_language)}</p>
             </div>
-            <span class="topbar-status">Online</span>
+            <span class="topbar-status">{_get_translation("online_status", st.session_state.response_language)}</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1424,37 +2098,41 @@ elif selected_page == "Farmer Query":
         if st.session_state.last_mic_hash != audio_hash:
             with st.spinner("Transcribing..."):
                 try:
-                    transcribed = transcribe(mic_audio)
+                    stt_language = "kn" if st.session_state.response_language == "Kannada" else "en"
+                    transcribed = transcribe(mic_audio, language=stt_language)
                     st.session_state.last_mic_hash = audio_hash
                     if transcribed:
                         st.session_state.pending_prompt = transcribed
                         st.rerun()
                     else:
-                        st.warning("Could not detect speech. Try again.")
+                        st.warning(_get_translation("speech_detection_failed", st.session_state.response_language))
                 except Exception as exc:
                     st.session_state.last_mic_hash = audio_hash
-                    st.error(f"Voice transcription failed: {exc}")
+                    st.error(_get_translation("speech_error", st.session_state.response_language).format(error=exc))
 
     # st.chat_input is Enter-to-send by default and includes a built-in send button.
-    typed_prompt = st.chat_input("Ask your farming question...")
+    typed_prompt = st.chat_input(_get_translation("ask_question", st.session_state.response_language))
 
     prompt = typed_prompt or st.session_state.pending_prompt
     if prompt:
+        display_text = st.session_state.pending_display_text or prompt
         st.session_state.pending_prompt = None
+        st.session_state.pending_display_text = None
 
-        st.session_state.messages.append({"role": "user", "content": prompt, "audio": None})
+        st.session_state.messages.append({"role": "user", "content": display_text, "audio": None})
         with st.chat_message("user"):
-            st.markdown(prompt)
+            st.markdown(display_text)
 
         with st.chat_message("assistant"):
             valid, reason = _is_valid_query(prompt)
             if not valid:
-                answer = _INVALID_RESPONSES.get(reason, _INVALID_RESPONSES["off-topic"])
+                answer = _get_invalid_response(reason, st.session_state.response_language)
+                final_answer = answer
             else:
-                with st.spinner("Preparing advisory..."):
-                    answer = ask(prompt)
-
-            final_answer = answer
+                with st.spinner(_get_translation("preparing_advisory", st.session_state.response_language)):
+                    answer = ask(prompt, response_language=st.session_state.response_language)
+                expanded_question = _expand_farmer_question(prompt, st.session_state.response_language)
+                final_answer = f"{expanded_question}\n\n{answer}"
 
             st.markdown(final_answer)
 
@@ -1464,7 +2142,7 @@ elif selected_page == "Farmer Query":
                     answer_audio = speak_to_bytes(final_answer, lang="en")
                     st.audio(answer_audio, format="audio/mp3")
                 except Exception as exc:
-                    st.warning(f"Could not generate voice output: {exc}")
+                    st.warning(_get_translation("voice_output_failed", st.session_state.response_language).format(error=exc))
 
         st.session_state.messages.append(
             {"role": "assistant", "content": final_answer, "audio": answer_audio}
@@ -1472,6 +2150,10 @@ elif selected_page == "Farmer Query":
         st.rerun()
 
 elif selected_page == "Weather Prediction":
+    if not st.session_state.farmer_registered:
+        st.warning(_get_translation("not_registered_weather", st.session_state.response_language))
+        st.stop()
+
     st.markdown(
         """
         <div class="chat-topbar">
@@ -1486,16 +2168,15 @@ elif selected_page == "Weather Prediction":
         unsafe_allow_html=True,
     )
 
-    st.markdown("<div class='page-card'>", unsafe_allow_html=True)
-    st.markdown("### Weather Prediction")
+    st.markdown(_get_translation("weather_title", st.session_state.response_language))
     with st.form("weather_form"):
-        location = st.text_input("Village / City", placeholder="e.g., Mysuru")
-        days = st.selectbox("Forecast window", ["3 Days", "7 Days", "10 Days"], index=1)
+        location = st.text_input(_get_translation("village_city", st.session_state.response_language), placeholder=_get_translation("village_placeholder", st.session_state.response_language))
+        days = st.selectbox(_get_translation("forecast_window", st.session_state.response_language), [_get_translation("home", st.session_state.response_language).replace('ನೆಲೆ', '3 Days').replace('Home', "3 Days"), "7 Days", "10 Days"], index=1)
         weather_submit = st.form_submit_button("Open Weather Prediction", use_container_width=True)
 
     if weather_submit:
         if not location.strip():
-            st.warning("Please enter a location.")
+            st.warning(_get_translation("location_required", st.session_state.response_language))
         else:
             day_count = int(days.split()[0])
             with st.spinner("Fetching live weather forecast..."):
@@ -1503,7 +2184,7 @@ elif selected_page == "Weather Prediction":
                     weather = get_weather_forecast(location, day_count)
                     forecast = weather["forecast"]
 
-                    st.success(f"Forecast loaded for {weather['location_name']} ({day_count} days).")
+                    st.success(_get_translation("forecast_loaded", st.session_state.response_language).format(location=weather['location_name'], days=day_count))
 
                     if forecast:
                         first = forecast[0]
@@ -1512,7 +2193,7 @@ elif selected_page == "Weather Prediction":
                         c2.metric("Today Rain Chance", f"{first['rain_prob']:.0f}%")
                         c3.metric("Today Rainfall", f"{first['rain_mm']:.1f} mm")
 
-                        st.markdown("#### Daily forecast")
+                        st.markdown(_get_translation("daily_forecast", st.session_state.response_language))
                         st.dataframe(
                             [
                                 {
@@ -1529,13 +2210,16 @@ elif selected_page == "Weather Prediction":
                             hide_index=True,
                         )
 
-                        st.markdown("#### Farming advisory")
+                        st.markdown(_get_translation("farming_advisory", st.session_state.response_language))
                         st.info(_weather_advice(forecast))
                 except Exception as exc:
-                    st.error(f"Weather prediction failed: {exc}")
-    st.markdown("</div>", unsafe_allow_html=True)
+                    st.error(_get_translation("weather_error", st.session_state.response_language).format(error=exc))
 
 elif selected_page == "Price Prediction":
+    if not st.session_state.farmer_registered:
+        st.warning(_get_translation("not_registered_price", st.session_state.response_language))
+        st.stop()
+
     st.markdown(
         """
         <div class="chat-topbar">
@@ -1550,8 +2234,7 @@ elif selected_page == "Price Prediction":
         unsafe_allow_html=True,
     )
 
-    st.markdown("<div class='page-card'>", unsafe_allow_html=True)
-    st.markdown("### Price Prediction")
+    st.markdown(_get_translation("price_title", st.session_state.response_language))
     with st.form("price_form"):
         crop = st.selectbox("Crop", ["Wheat", "Rice", "Maize", "Cotton", "Soybean", "Tomato", "Onion", "Potato"])
         mandi = st.selectbox("Market (Mandi)", ["Delhi", "Jaipur", "Lucknow", "Indore", "Nagpur"])
@@ -1613,7 +2296,7 @@ elif selected_page == "Price Prediction":
                         st.caption(f"Weather source: {provider_label} + NASA POWER baseline")
 
                         if model_forecast and model_lower and model_upper and model_weights:
-                            st.markdown("#### Crop price forecasting engine")
+                            st.markdown(_get_translation("crop_price_forecasting", st.session_state.response_language))
                             f7, f14, f30 = model_forecast[7], model_forecast[14], model_forecast[30]
                             c1p, c2p, c3p = st.columns(3)
                             c1p.metric("7-day price", f"₹{f7:,.0f}", help=f"95% CI: ₹{model_lower[7]:,.0f} - ₹{model_upper[7]:,.0f}")
@@ -1625,7 +2308,7 @@ elif selected_page == "Price Prediction":
                                 f"LSTM {model_weights['lstm']:.2f}, "
                                 f"XGBoost {model_weights['xgboost']:.2f}"
                             )
-                        st.markdown("#### Alert engine")
+                        st.markdown(_get_translation("alert_engine", st.session_state.response_language))
                         for alert in risk["alerts"]:
                             st.write(alert)
 
@@ -1634,7 +2317,7 @@ elif selected_page == "Price Prediction":
                         c2.metric("7-day Rain", f"{risk['total_rain_mm_7d']:.1f} mm")
                         c3.metric("Rain vs Baseline", f"{risk['rain_anomaly_mm']:+.1f} mm")
 
-                        st.markdown("#### Profit optimizer (0/7/14/21/30 days)")
+                        st.markdown(_get_translation("profit_optimizer", st.session_state.response_language))
                         st.dataframe(
                             [
                                 {
@@ -1651,7 +2334,7 @@ elif selected_page == "Price Prediction":
                             use_container_width=True,
                         )
 
-                        st.markdown("#### Recommendation")
+                        st.markdown(_get_translation("recommendation", st.session_state.response_language))
                         st.info(
                             (
                                 f"**{result['recommendation']}**\n\n"
@@ -1666,4 +2349,3 @@ elif selected_page == "Price Prediction":
                             f"`{_PRICE_DATA_CSV}` with columns date,crop,mandi,price (optional: rainfall_index,msp_floor). "
                             f"Details: {exc}"
                         )
-    st.markdown("</div>", unsafe_allow_html=True)

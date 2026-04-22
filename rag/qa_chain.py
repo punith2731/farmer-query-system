@@ -2,7 +2,8 @@ import os
 import re
 
 from dotenv import load_dotenv
-from langchain_openai import OpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from rag.retriever import get_retriever
 
 load_dotenv()
@@ -32,11 +33,66 @@ _SMALL_TALK_EXACT = {
     "good morning", "good evening", "good night",
 }
 
-def _format_context(docs):
+
+def _rank_documents_for_query(query, docs, max_docs=4, max_chars=1200):
+    if not docs:
+        return []
+
+    query_text = (query or "").strip().lower()
+    keywords = _extract_query_keywords(query)
+    scored = []
+
+    for idx, doc in enumerate(docs):
+        text = (getattr(doc, "page_content", "") or "").strip()
+        if not text:
+            continue
+
+        lowered = text.lower()
+        overlap = sum(1 for kw in keywords if kw in lowered)
+        exact_phrase_bonus = 2 if query_text and query_text in lowered else 0
+        position_bonus = max(0.0, 0.6 - (idx * 0.08))
+        score = (overlap * 3.0) + exact_phrase_bonus + position_bonus
+
+        trimmed = text[:max_chars].strip()
+        if trimmed:
+            scored.append((score, idx, doc, trimmed))
+
+    if not scored:
+        return []
+
+    scored.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+
+    selected = []
+    seen = set()
+    for _, _, doc, trimmed in scored:
+        dedupe_key = re.sub(r"\s+", " ", trimmed[:220].lower()).strip()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        selected.append((doc, trimmed))
+        if len(selected) >= max_docs:
+            break
+
+    return selected
+
+
+def _format_context(query, docs):
     if not docs:
         return "No relevant context was found in the knowledge base."
 
-    return "\n\n".join(doc.page_content for doc in docs)
+    ranked_docs = _rank_documents_for_query(query, docs, max_docs=4, max_chars=1200)
+    if not ranked_docs:
+        return "No relevant context was found in the knowledge base."
+
+    blocks = []
+    for i, (doc, chunk) in enumerate(ranked_docs, start=1):
+        metadata = getattr(doc, "metadata", {}) or {}
+        source = str(metadata.get("source", "unknown"))
+        source_name = source.replace("\\", "/").split("/")[-1]
+        page = metadata.get("page", "?")
+        blocks.append(f"[Context {i} | source: {source_name} | page: {page}]\n{chunk}")
+
+    return "\n\n".join(blocks)
 
 
 def _retrieve_documents(query, retriever):
@@ -67,23 +123,58 @@ def _is_clearly_non_farmer_query(query):
 
 
 def _build_prompt(query, context, response_language="English"):
-    language_instruction = (
-        "Write the final answer in Kannada (ಕನ್ನಡ) using natural, farmer-friendly wording. "
-        "Keep crop names, scientific terms, and units (kg/acre, ml/L, NPK) clear and accurate."
-        if (response_language or "").strip().lower() == "kannada"
-        else "Write the final answer in English."
-    )
+    """Build a prompt that supports multiple languages for response generation."""
+    language_instruction = ""
+    
+    if response_language.lower() == "kannada":
+        language_instruction = (
+            "- Answer ONLY in Kannada (ಕನ್ನಡ)\n"
+            "- Use clear, simple Kannada language suitable for farmers\n"
+        )
+    else:
+        language_instruction = (
+            "- Answer ONLY in English\n"
+            "- Use simple, clear language suitable for farmers\n"
+        )
 
     return (
-        "You are an agriculture advisory assistant. Use only the given context from PDF documents to answer. "
-        "Do not add facts outside the provided context. "
-        "Write the answer in clean, grammatically correct, easy-to-read sentences. "
-        f"{language_instruction} "
-        "If the context is insufficient, say: 'I could not find enough information in the uploaded documents.'\n\n"
+        "You are an agricultural expert assistant.\n\n"
+        "Use the context below to answer the farmer's question.\n\n"
         f"Context:\n{context}\n\n"
-        f"Question: {query}\n"
-        "Answer:"
+        f"Question:\n{query}\n\n"
+        "Instructions:\n"
+        f"{language_instruction}"
+        "- Provide a clear, practical, and farmer-friendly answer\n"
+        "- If context is insufficient, explicitly mention what is missing and then expand using reliable general agricultural knowledge\n"
+        "- Do not force a fixed section format unless the user explicitly asks for it\n"
+        "- Expand the question intent briefly, then provide a deeper explanation\n"
+        "- Write a fuller response in 2-4 connected paragraphs (and use bullets only if truly needed)\n"
+        "- Include practical field-level advice such as timing, dosage ranges, and common mistakes where relevant\n\n"
+        "Now provide the final answer."
     )
+
+
+def _force_kannada_farmer_friendly(llm, retrieved_answer):
+    """Enforce Kannada-only answer in simple farmer-friendly language."""
+    messages = [
+        SystemMessage(
+            content=(
+                "You are an assistant that ALWAYS answers in Kannada. "
+                "Do not use English unless explicitly asked. "
+                "Use simple, practical, farmer-friendly Kannada."
+            )
+        ),
+        HumanMessage(
+            content=(
+                "Translate the following answer into Kannada in simple farmer-friendly language:\n\n"
+                f"{retrieved_answer}"
+            )
+        ),
+    ]
+
+    translated = llm.invoke(messages)
+    translated_text = translated.content if hasattr(translated, "content") else str(translated)
+    return _clean_answer_text(translated_text)
 
 
 def _get_openai_api_key():
@@ -236,16 +327,29 @@ def ask(query, response_language="English"):
 
         retriever = get_retriever()
         docs = _retrieve_documents(query, retriever)
-        context = _format_context(docs)
-        llm = OpenAI(temperature=0)
-        response = llm.invoke(_build_prompt(query, context, response_language=response_language))
+        context = _format_context(query, docs)
+        llm = ChatOpenAI(temperature=0)
+        target_language = (response_language or "English").strip()
+        intermediate_language = "English" if target_language.lower() == "kannada" else target_language
 
-        if isinstance(response, str):
-            return _clean_answer_text(response)
+        primary_response = llm.invoke(
+            [
+                SystemMessage(content="You are an agricultural expert assistant."),
+                HumanMessage(content=_build_prompt(query, context, response_language=intermediate_language)),
+            ]
+        )
 
-        # Some LLM wrappers return object-like responses.
-        content = getattr(response, "content", str(response))
-        return _clean_answer_text(content)
+        retrieved_answer = (
+            primary_response.content
+            if hasattr(primary_response, "content")
+            else str(primary_response)
+        )
+        retrieved_answer = _clean_answer_text(retrieved_answer)
+
+        if target_language.lower() == "kannada":
+            return _force_kannada_farmer_friendly(llm, retrieved_answer)
+
+        return retrieved_answer
     except FileNotFoundError as exc:
         return str(exc)
     except Exception as exc:
@@ -260,4 +364,12 @@ def ask(query, response_language="English"):
                     "then retry."
                 )
 
-        return f"Unable to process your question right now: {exc}"
+        detail = str(exc).strip() or type(exc).__name__
+        if "dimension mismatch" in detail.lower() or "assertionerror" in detail.lower():
+            return (
+                "Unable to process your question right now: embedding/index mismatch detected. "
+                "Please rebuild the vectorstore by running ingestion/ingest.py with your current "
+                "EMBEDDING_MODEL setting."
+            )
+
+        return f"Unable to process your question right now: {detail}"

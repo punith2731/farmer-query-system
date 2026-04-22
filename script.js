@@ -1,230 +1,397 @@
-// Crop Price Forecasting Dashboard interactions
-// - Sidebar toggle (mobile)
-// - Dark mode toggle with persistence
-// - Mock async prediction fetch with spinner
-// - Trend chart + confidence interval updates
+const { useEffect, useMemo, useRef, useState } = React;
 
-const menuToggle = document.getElementById("menuToggle");
-const sidebar = document.getElementById("sidebar");
-const themeToggle = document.getElementById("themeToggle");
-const loadingOverlay = document.getElementById("loadingOverlay");
-const refreshBtn = document.getElementById("refreshBtn");
-const cropSelect = document.getElementById("cropSelect");
-const mandiSelect = document.getElementById("mandiSelect");
+const initialConversations = [
+  {
+    id: "chat-1",
+    title: "Welcome Chat",
+    messages: [
+      {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content:
+          "# Welcome 👋\nI am your **AI Assistant**.\n\nTry asking:\n- Explain crop rotation\n- Give me irrigation tips for tomato\n- Show a Python example\n\n```python\ndef greet(name: str) -> str:\n    return f\"Hello, {name}!\"\n```",
+      },
+    ],
+  },
+  {
+    id: "chat-2",
+    title: "Fertilizer Guide",
+    messages: [
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: "Can you give me a basic NPK schedule for paddy?",
+      },
+      {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content:
+          "Sure. A general split approach:\n1. Basal dose before transplanting\n2. First top dressing at tillering\n3. Second top dressing at panicle initiation\n\nAdjust based on soil test for best results.",
+      },
+    ],
+  },
+];
 
-const price7 = document.getElementById("price7");
-const price14 = document.getElementById("price14");
-const price30 = document.getElementById("price30");
-const confidenceText = document.getElementById("confidenceText");
-const confidenceMarker = document.getElementById("confidenceMarker");
-
-let trendChart;
-
-const cropBasePrice = {
-  wheat: 2200,
-  rice: 2500,
-  maize: 1950,
-  cotton: 6200,
-  soybean: 4300
-};
-
-function formatPrice(value) {
-  return `₹${Math.round(value).toLocaleString("en-IN")} / qtl`;
+function classNames(...classes) {
+  return classes.filter(Boolean).join(" ");
 }
 
-function createDaysLabels(days) {
-  return Array.from({ length: days }, (_, i) => `D${i + 1}`);
-}
-
-function generateTrendSeries(base, len = 30) {
-  let current = base * 0.94;
-
-  return Array.from({ length: len }, () => {
-    const drift = (Math.random() - 0.45) * (base * 0.01);
-    current = Math.max(base * 0.7, current + drift);
-    return Math.round(current);
+function renderMarkdown(markdown) {
+  const rawHtml = marked.parse(markdown ?? "", {
+    breaks: true,
+    gfm: true,
   });
+  return DOMPurify.sanitize(rawHtml);
 }
 
-function forecastFromBase(base) {
-  const f7 = base * 1.01;
-  const f14 = base * 1.03;
-  const f30 = base * 1.06;
-
-  const ciLow = f14 * 0.94;
-  const ciHigh = f14 * 1.06;
-
-  return { f7, f14, f30, ciLow, ciHigh };
+function TypingIndicator() {
+  return (
+    <div className="mb-4 flex items-start justify-start">
+      <div className="max-w-[80%] rounded-2xl rounded-tl-sm border border-white bg-black px-4 py-3 text-white">
+        <div className="flex items-center gap-1">
+          <span className="typing-dot" />
+          <span className="typing-dot" />
+          <span className="typing-dot" />
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function updateForecastCards(data) {
-  price7.textContent = formatPrice(data.f7);
-  price14.textContent = formatPrice(data.f14);
-  price30.textContent = formatPrice(data.f30);
+function MessageBubble({ message }) {
+  const isUser = message.role === "user";
+  const html = useMemo(() => renderMarkdown(message.content), [message.content]);
+  const bubbleRef = useRef(null);
 
-  confidenceText.textContent = `Expected: ${formatPrice(data.f14)} (95% CI: ₹${Math.round(data.ciLow).toLocaleString("en-IN")} – ₹${Math.round(data.ciHigh).toLocaleString("en-IN")})`;
+  useEffect(() => {
+    if (!bubbleRef.current) return;
 
-  // Position marker between low-high; use expected as % center for visual cue.
-  confidenceMarker.style.left = "58%";
+    const codeBlocks = bubbleRef.current.querySelectorAll("pre code");
+    codeBlocks.forEach((codeBlock) => {
+      const pre = codeBlock.parentElement;
+      if (!pre || pre.dataset.enhanced === "true") return;
+
+      pre.dataset.enhanced = "true";
+
+      const wrapper = document.createElement("div");
+      wrapper.className = "code-wrapper";
+      pre.parentNode.insertBefore(wrapper, pre);
+      wrapper.appendChild(pre);
+
+      const copyButton = document.createElement("button");
+      copyButton.className = "copy-code-btn";
+      copyButton.type = "button";
+      copyButton.textContent = "Copy";
+      copyButton.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(codeBlock.textContent || "");
+          copyButton.textContent = "Copied!";
+          setTimeout(() => {
+            copyButton.textContent = "Copy";
+          }, 1200);
+        } catch {
+          copyButton.textContent = "Failed";
+          setTimeout(() => {
+            copyButton.textContent = "Copy";
+          }, 1200);
+        }
+      });
+
+      wrapper.appendChild(copyButton);
+    });
+  }, [html]);
+
+  return (
+    <div
+      className={classNames(
+        "mb-4 flex w-full",
+        isUser ? "justify-end" : "justify-start"
+      )}
+    >
+      <div
+        className={classNames(
+          "markdown-body max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-7",
+          isUser
+            ? "rounded-tr-sm border border-white bg-white text-black"
+            : "rounded-tl-sm bg-black text-white"
+        )}
+        ref={bubbleRef}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </div>
+  );
 }
 
-function buildTrendChart(basePrice) {
-  const canvas = document.getElementById("priceTrendChart");
-  const labels = createDaysLabels(30);
-  const series = generateTrendSeries(basePrice, 30);
-  const styles = getComputedStyle(document.body);
-  const primaryColor = styles.getPropertyValue("--primary").trim() || "#2f80ed";
-  const borderColor = styles.getPropertyValue("--border").trim() || "rgba(16, 42, 67, 0.15)";
-  const mutedColor = styles.getPropertyValue("--muted").trim() || "#486581";
+function Sidebar({ conversations, activeId, onSelect, onNewChat, isOpen, onClose }) {
+  return (
+    <>
+      <div
+        className={classNames(
+          "fixed inset-0 z-20 bg-black/80 lg:hidden",
+          isOpen ? "opacity-100" : "pointer-events-none opacity-0"
+        )}
+        onClick={onClose}
+      />
 
-  if (trendChart) {
-    trendChart.destroy();
-  }
+      <aside
+        className={classNames(
+          "fixed inset-y-0 left-0 z-30 w-72 border-r border-white bg-black p-3 lg:static lg:z-0 lg:translate-x-0",
+          isOpen ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
+        <button
+          className="mb-3 flex w-full items-center justify-center gap-2 rounded-xl border border-white bg-black px-4 py-3 text-sm font-medium text-white hover:bg-white hover:text-black"
+          onClick={onNewChat}
+        >
+          <span className="text-base">＋</span>
+          New Chat
+        </button>
 
-  trendChart = new Chart(canvas, {
-    type: "line",
-    data: {
-      labels,
-      datasets: [
+        <div className="chat-scroll h-[calc(100vh-92px)] space-y-2 overflow-y-auto pr-1">
+          {conversations.map((chat) => (
+            <button
+              key={chat.id}
+              onClick={() => {
+                onSelect(chat.id);
+                onClose();
+              }}
+              className={classNames(
+                "w-full rounded-xl px-3 py-2 text-left text-sm border",
+                chat.id === activeId
+                  ? "border-white bg-white text-black"
+                  : "border-white bg-black text-white hover:bg-white hover:text-black"
+              )}
+            >
+              <p className="truncate">{chat.title}</p>
+            </button>
+          ))}
+        </div>
+      </aside>
+    </>
+  );
+}
+
+function Header({ onOpenSidebar }) {
+  return (
+    <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-white bg-black px-4">
+      <div className="flex items-center gap-2">
+        <button
+          className="rounded-lg border border-white bg-black p-2 text-white hover:bg-white hover:text-black lg:hidden"
+          onClick={onOpenSidebar}
+          aria-label="Open chat history"
+        >
+          ☰
+        </button>
+        <h1 className="text-sm font-semibold text-white">AI Assistant</h1>
+      </div>
+      <button
+        className="rounded-lg border border-white bg-black px-3 py-1.5 text-xs text-white hover:bg-white hover:text-black"
+        aria-label="Settings"
+      >
+        ⚙
+      </button>
+    </header>
+  );
+}
+
+function InputBar({ value, onChange, onSend, disabled, onFilePick }) {
+  const fileInputRef = useRef(null);
+
+  return (
+    <div className="sticky bottom-0 border-t border-white bg-black px-3 pb-3 pt-2">
+      <div className="mx-auto flex w-full max-w-3xl items-end gap-2 rounded-2xl border border-white bg-black p-2">
+        <button
+          className="rounded-lg border border-transparent p-2 text-white hover:border-white"
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          title="Attach file"
+        >
+          📎
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          onChange={(e) => onFilePick(e.target.files?.[0])}
+        />
+
+        <textarea
+          rows={1}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              onSend();
+            }
+          }}
+          placeholder="Message AI Assistant..."
+          className="chat-input max-h-36 min-h-[44px] flex-1 resize-none bg-transparent px-2 py-2 text-sm text-white placeholder:text-white/60 focus:outline-none"
+        />
+
+        <button
+          className="rounded-xl border border-white bg-white p-2.5 text-black hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+          type="button"
+          disabled={disabled}
+          onClick={onSend}
+          aria-label="Send message"
+          title="Send"
+        >
+          ➤
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [conversations, setConversations] = useState(initialConversations);
+  const [activeId, setActiveId] = useState(initialConversations[0].id);
+  const [draft, setDraft] = useState("");
+  const [isTyping, setIsTyping] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const activeConversation = useMemo(
+    () => conversations.find((chat) => chat.id === activeId),
+    [conversations, activeId]
+  );
+
+  const listRef = useRef(null);
+  const endRef = useRef(null);
+
+  useEffect(() => {
+    if (!endRef.current) return;
+    endRef.current.scrollIntoView({ block: "end" });
+  }, [activeConversation?.messages?.length, isTyping]);
+
+  function createNewChat() {
+    const newChat = {
+      id: `chat-${Date.now()}`,
+      title: "New Conversation",
+      messages: [
         {
-          label: "Modal Price (₹/qtl)",
-          data: series,
-          borderColor: primaryColor,
-          backgroundColor: "rgba(47, 128, 237, 0.14)",
-          fill: true,
-          tension: 0.35,
-          pointRadius: 0,
-          pointHoverRadius: 4
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: {
-        mode: "index",
-        intersect: false
-      },
-      plugins: {
-        legend: {
-          display: false
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "New chat created. Ask me anything.",
         },
-        tooltip: {
-          callbacks: {
-            label(context) {
-              return ` ₹${context.parsed.y.toLocaleString("en-IN")}`;
-            }
-          }
-        }
-      },
-      scales: {
-        x: {
-          grid: {
-            display: false
-          },
-          ticks: {
-            color: mutedColor
-          }
-        },
-        y: {
-          beginAtZero: false,
-          grid: {
-            color: borderColor
-          },
-          ticks: {
-            color: mutedColor,
-            callback(value) {
-              return `₹${Number(value).toLocaleString("en-IN")}`;
-            }
-          }
-        }
-      }
-    }
-  });
-}
+      ],
+    };
 
-async function fetchPredictions() {
-  // Simulate network call; replace with real API fetch as needed.
-  loadingOverlay.classList.remove("hidden");
-
-  const crop = cropSelect.value;
-  const mandi = mandiSelect.value;
-  const mandiFactor = (mandi.charCodeAt(0) % 5) * 0.007;
-  const base = cropBasePrice[crop] * (1 + mandiFactor);
-
-  await new Promise((resolve) => setTimeout(resolve, 900));
-
-  const forecast = forecastFromBase(base);
-  updateForecastCards(forecast);
-  buildTrendChart(base);
-
-  loadingOverlay.classList.add("hidden");
-}
-
-function setupSidebarToggle() {
-  menuToggle.addEventListener("click", () => {
-    const isOpen = sidebar.classList.toggle("open");
-    menuToggle.setAttribute("aria-expanded", String(isOpen));
-  });
-
-  // Close sidebar on outside click for better mobile UX
-  document.addEventListener("click", (event) => {
-    const clickedInsideSidebar = sidebar.contains(event.target);
-    const clickedToggle = menuToggle.contains(event.target);
-
-    if (!clickedInsideSidebar && !clickedToggle && sidebar.classList.contains("open")) {
-      sidebar.classList.remove("open");
-      menuToggle.setAttribute("aria-expanded", "false");
-    }
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && sidebar.classList.contains("open")) {
-      sidebar.classList.remove("open");
-      menuToggle.setAttribute("aria-expanded", "false");
-    }
-  });
-}
-
-function setupThemeToggle() {
-  const storedTheme = localStorage.getItem("dashboard-theme");
-  if (storedTheme === "dark") {
-    document.body.classList.add("dark");
+    setConversations((prev) => [newChat, ...prev]);
+    setActiveId(newChat.id);
+    setSidebarOpen(false);
   }
 
-  themeToggle.addEventListener("click", () => {
-    const dark = document.body.classList.toggle("dark");
-    localStorage.setItem("dashboard-theme", dark ? "dark" : "light");
-    themeToggle.innerHTML = dark
-      ? '<i class="fa-solid fa-sun"></i>'
-      : '<i class="fa-solid fa-moon"></i>';
-
-    const selectedCrop = cropSelect.value;
-    const selectedMandi = mandiSelect.value;
-    const mandiFactor = (selectedMandi.charCodeAt(0) % 5) * 0.007;
-    const base = cropBasePrice[selectedCrop] * (1 + mandiFactor);
-    buildTrendChart(base);
-  });
-
-  if (document.body.classList.contains("dark")) {
-    themeToggle.innerHTML = '<i class="fa-solid fa-sun"></i>';
+  function updateConversation(conversationId, updater) {
+    setConversations((prev) =>
+      prev.map((chat) => (chat.id === conversationId ? updater(chat) : chat))
+    );
   }
+
+  function fakeAssistantResponse(userText) {
+    const prompt = userText.trim();
+    if (!prompt) {
+      return "Could you provide a bit more detail?";
+    }
+    return (
+      `You asked: **${prompt}**\n\n` +
+      "Here is a concise response with markdown support:\n" +
+      "- Clean UI\n- Fast interaction\n- Code friendly formatting\n\n" +
+      "```javascript\n" +
+      "const nextStep = 'Connect this UI to your backend API';\n" +
+      "console.log(nextStep);\n" +
+      "```"
+    );
+  }
+
+  async function handleSend() {
+    const text = draft.trim();
+    if (!text || !activeConversation || isTyping) return;
+
+    setDraft("");
+
+    const userMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: text,
+    };
+
+    updateConversation(activeConversation.id, (chat) => ({
+      ...chat,
+      title: chat.title === "New Conversation" ? text.slice(0, 26) : chat.title,
+      messages: [...chat.messages, userMessage],
+    }));
+
+    setIsTyping(true);
+    await new Promise((resolve) => setTimeout(resolve, 950));
+
+    const assistantMessage = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: fakeAssistantResponse(text),
+    };
+
+    updateConversation(activeConversation.id, (chat) => ({
+      ...chat,
+      messages: [...chat.messages, assistantMessage],
+    }));
+
+    setIsTyping(false);
+  }
+
+  function handleFilePick(file) {
+    if (!file || !activeConversation) return;
+    const fileNote = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: `Attached file: **${file.name}** (${Math.max(1, Math.round(file.size / 1024))} KB)`
+    };
+
+    updateConversation(activeConversation.id, (chat) => ({
+      ...chat,
+      messages: [...chat.messages, fileNote],
+    }));
+  }
+
+  return (
+    <div className="h-screen w-screen overflow-hidden bg-black text-white">
+      <div className="grid h-full grid-cols-1 lg:grid-cols-[18rem_1fr]">
+        <Sidebar
+          conversations={conversations}
+          activeId={activeId}
+          onSelect={setActiveId}
+          onNewChat={createNewChat}
+          isOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+        />
+
+        <main className="flex min-h-0 flex-col">
+          <Header onOpenSidebar={() => setSidebarOpen(true)} />
+
+          <section className="relative flex min-h-0 flex-1 flex-col">
+            <div
+              ref={listRef}
+              className="chat-scroll mx-auto w-full max-w-3xl flex-1 overflow-y-auto px-3 py-5 md:px-5"
+            >
+              {(activeConversation?.messages || []).map((message) => (
+                <MessageBubble key={message.id} message={message} />
+              ))}
+              {isTyping && <TypingIndicator />}
+              <div ref={endRef} />
+            </div>
+
+            <InputBar
+              value={draft}
+              onChange={setDraft}
+              onSend={handleSend}
+              disabled={isTyping || !draft.trim()}
+              onFilePick={handleFilePick}
+            />
+          </section>
+        </main>
+      </div>
+    </div>
+  );
 }
 
-function bindEvents() {
-  refreshBtn.addEventListener("click", fetchPredictions);
-  cropSelect.addEventListener("change", fetchPredictions);
-  mandiSelect.addEventListener("change", fetchPredictions);
-  window.addEventListener("resize", () => {
-    if (trendChart) trendChart.resize();
-  });
-}
-
-function init() {
-  setupSidebarToggle();
-  setupThemeToggle();
-  bindEvents();
-  fetchPredictions();
-}
-
-document.addEventListener("DOMContentLoaded", init);
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
