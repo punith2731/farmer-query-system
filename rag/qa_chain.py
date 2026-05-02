@@ -149,7 +149,9 @@ def _build_prompt(query, context, response_language="English"):
         "- Do not force a fixed section format unless the user explicitly asks for it\n"
         "- Expand the question intent briefly, then provide a deeper explanation\n"
         "- Write a fuller response in 2-4 connected paragraphs (and use bullets only if truly needed)\n"
-        "- Include practical field-level advice such as timing, dosage ranges, and common mistakes where relevant\n\n"
+        "- Include practical field-level advice such as timing, dosage ranges, and common mistakes where relevant\n"
+        "- Summarize and synthesize the information. Do NOT just copy and paste raw sentences from the context.\n"
+        "- Remove any technical artifacts from the context like '(cid: 190)' or weird characters before answering.\n\n"
         "Now provide the final answer."
     )
 
@@ -196,6 +198,7 @@ def _is_quota_error(exc):
 
 def _normalize_text(text):
     cleaned = (text or "")
+    cleaned = re.sub(r"\(cid:\s*\d+\)", "", cleaned, flags=re.IGNORECASE)
 
     # Remove common PDF/OCR artifacts.
     cleaned = cleaned.replace("�", "")
@@ -309,7 +312,8 @@ def _retrieval_only_fallback_answer(docs, query=""):
     if not selected_sentences:
         return "I could not find enough information in the uploaded documents."
 
-    answer = " ".join(selected_sentences)
+    bullets = "\n".join(f"- {sentence}" for sentence in selected_sentences)
+    answer = "⚠️ **Notice: The AI service is currently unavailable or busy. Displaying raw excerpts from the farming manual instead:**\n\n" + bullets
     return _clean_answer_text(answer)
 
 def ask(query, response_language="English"):

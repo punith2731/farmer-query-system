@@ -1764,10 +1764,7 @@ with st.sidebar:
                 st.session_state.pending_display_text = display_text
                 st.rerun()
 
-        st.markdown(_get_translation("voice_query", st.session_state.response_language))
-        st.markdown("<div class='sidebar-mic'>", unsafe_allow_html=True)
-        mic_audio = st.audio_input(" ", key="mic_input")
-        st.markdown("</div>", unsafe_allow_html=True)
+        # Voice query moved to main chat container
 
         if st.button(_get_translation("new_chat", st.session_state.response_language), use_container_width=True):
             st.session_state.messages = _seed_welcome_message()
@@ -2090,7 +2087,54 @@ elif selected_page == "Farmer Query":
                 st.markdown(message["content"])
                 if message["role"] == "assistant" and message.get("audio"):
                     st.audio(message["audio"], format="audio/mp3")
+        
+        # INTERACTIVE WORKFLOW BUTTONS
+        if len(st.session_state.messages) <= 1:
+            st.markdown("<br><p style='text-align: center; color: #6b7280; font-size: 0.9rem;'>Or choose a guided option below:</p>", unsafe_allow_html=True)
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🌱 I want to start farming (Beginner Guide)", use_container_width=True):
+                    place = st.session_state.farmer_profile.get("place", "my local area")
+                    st.session_state.pending_prompt = f"I am a beginner from {place} and want to start farming. What crops are suitable for my area, and what are the very first steps I should take regarding soil testing and preparation?"
+                    st.session_state.pending_display_text = "I am a beginner and want to start farming."
+                    st.rerun()
+                if st.button("💧 Irrigation & Fertilizer advice", use_container_width=True):
+                    st.session_state.pending_prompt = "What are the best practices for irrigation and fertilizer application for my crops?"
+                    st.session_state.pending_display_text = "I need irrigation and fertilizer advice."
+                    st.rerun()
+            with col2:
+                if st.button("🐛 Help me identify a pest/disease", use_container_width=True):
+                    st.session_state.pending_prompt = "How can I identify and control common pests and diseases in my crops?"
+                    st.session_state.pending_display_text = "I need help with pest/disease management."
+                    st.rerun()
+                if st.button("🏛️ Government Schemes (PM-Kisan)", use_container_width=True):
+                    st.session_state.pending_prompt = "What is PM-Kisan and what are the eligibility criteria and documents required?"
+                    st.session_state.pending_display_text = "Tell me about Government Schemes like PM-Kisan."
+                    st.rerun()
+        else:
+            st.markdown("<br>", unsafe_allow_html=True)
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("Tell me more about this", use_container_width=True):
+                    st.session_state.pending_prompt = "Can you provide more details on your previous answer regarding this crop or farming technique?"
+                    st.session_state.pending_display_text = "Tell me more about this."
+                    st.rerun()
+            with col2:
+                if st.button("What about costs?", use_container_width=True):
+                    st.session_state.pending_prompt = "What are the estimated costs or financial implications related to this farming method?"
+                    st.session_state.pending_display_text = "What about costs?"
+                    st.rerun()
+            with col3:
+                if st.button("Any alternatives?", use_container_width=True):
+                    st.session_state.pending_prompt = "Are there any alternative farming methods or crop options available?"
+                    st.session_state.pending_display_text = "Any alternatives?"
+                    st.rerun()
+
         st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<div class='sidebar-mic' style='margin-bottom: 10px;'>", unsafe_allow_html=True)
+    mic_audio = st.audio_input("Speak your question", key="main_mic_input")
+    st.markdown("</div>", unsafe_allow_html=True)
 
     if mic_audio is not None:
         audio_bytes = mic_audio.getvalue()
