@@ -1,7 +1,10 @@
 import os
 
 from dotenv import load_dotenv
-from langchain_community.embeddings import HuggingFaceEmbeddings
+try:
+    from langchain_huggingface import HuggingFaceEmbeddings
+except ImportError:
+    from langchain_community.embeddings import HuggingFaceEmbeddings  # type: ignore[no-redef]
 from langchain_openai import OpenAIEmbeddings
 
 load_dotenv()
